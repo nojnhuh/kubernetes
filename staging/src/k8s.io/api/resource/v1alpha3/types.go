@@ -1103,6 +1103,102 @@ type ResourceSlicePatch struct {
 
 // ResourceSlicePatchSpec contains modifications to ResourceSlices.
 type ResourceSlicePatchSpec struct {
+	// Devices defines how to patch device attributes and taints.
+	Devices DevicePatch `json:"devices" protobuf:"bytes,1,name=devices"`
+}
+
+// DevicePatch selects one or more devices by class, driver, pool, device names
+// and/or CEL selectors. All of these criteria must be satisfied by a device, otherwise
+// it is ignored by the patch. A DevicePatch with no selection criteria is
+// valid and matches all devices.
+type DevicePatch struct {
+	// Filter defines which device(s) the patch is applied to.
+	//
+	// +optional
+	Filter *DevicePatchFilter `json:"filter,omitempty" protobuf:"bytes,1,opt,name=filter"`
+
+	// If a ResourceSlice and a DevicePatch define the same attribute or
+	// capacity, the value of the DevicePatch is used. If multiple
+	// different DevicePatches match the same device, then the one with
+	// the highest priority wins. If the priorities are the same, it is non-deterministic
+	// which patch is used.
+	Priority int32 `json:"priority" protobuf:"varint,2,name=priority"`
+
+	// Attributes defines the set of attributes to patch for matching devices.
+	// The name of each attribute must be unique in that set and
+	// include the domain prefix.
+	//
+	// The maximum number of attributes and capacities in the DevicePatch combined is 32.
+	// This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes
+	// feature gate.
+	//
+	// +optional
+	// +featureGate:DRAAdminControlledDeviceAttributes
+	Attributes map[FullyQualifiedName]DeviceAttribute `json:"attributes,omitempty" protobuf:"bytes,3,rep,name=attributes"`
+
+	// Capacity defines the set of capacities to patch for matching devices.
+	// The name of each capacity must be unique in that set and
+	// include the domain prefix.
+	//
+	// The maximum number of attributes and capacities in the DevicePatch combined is 32.
+	// This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes
+	// feature gate.
+	//
+	// +optional
+	// +featureGate:DRAAdminControlledDeviceAttributes
+	Capacity map[FullyQualifiedName]DeviceCapacity `json:"capacity,omitempty" protobuf:"bytes,4,rep,name=capacity"`
+}
+
+// DevicePatchFilter defines which device(s) a [DevicePatch] applies to.
+type DevicePatchFilter struct {
+	// If DeviceClass is set, the selectors defined there must be
+	// satisfied by a device to be patched.
+	//
+	// +optional
+	DeviceClass *string `json:"deviceClass,omitempty" protobuf:"bytes,1,opt,name=deviceClass"`
+
+	// If driver is set, only devices from that driver are patched.
+	//
+	// +optional
+	Driver *string `json:"driver,omitempty" protobuf:"bytes,2,opt,name=driver"`
+
+	// If pool is set, only devices in that pool are patched.
+	//
+	// Also setting the driver name may be useful to avoid
+	// ambiguity when different drivers use the same pool name,
+	// but this is not required because selecting pools from
+	// different drivers may also be useful, for example when
+	// drivers with node-local devices use the node name as
+	// their pool name.
+	//
+	// +optional
+	Pool *string `json:"pool,omitempty" protobuf:"bytes,3,opt,name=pool"`
+
+	// If device is set, only devices with that name are patched.
+	//
+	// Also setting driver and pool may be required to avoid ambiguity,
+	// but is not required.
+	//
+	// +optional
+	Device *string `json:"device,omitempty" protobuf:"bytes,4,opt,name=device"`
+
+	// Selectors define criteria which must be satisfied by a
+	// device to be patched. All selectors must be satisfied.
+	//
+	// +optional
+	// +listType=atomic
+	Selectors []DeviceSelector `json:"selectors,omitempty" protobuf:"bytes,5,rep,name=selectors"`
+}
+
+// DeviceCapacity describes a quantity associated with a device.
+type DeviceCapacity struct {
+	// Value defines how much of a certain device capacity is available.
+	//
+	// +required
+	Value resource.Quantity `json:"value" protobuf:"bytes,1,rep,name=value"`
+
+	// potential future addition: fields which define how to "consume"
+	// capacity (= share a single device between different consumers).
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

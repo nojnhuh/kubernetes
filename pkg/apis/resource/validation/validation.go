@@ -821,18 +821,61 @@ func validateNetworkDeviceData(networkDeviceData *resource.NetworkDeviceData, fl
 // ValidateResourceSlicePatch tests if a ResourceSlicePatch object is valid.
 func ValidateResourceSlicePatch(patch *resource.ResourceSlicePatch) field.ErrorList {
 	allErrs := corevalidation.ValidateObjectMeta(&patch.ObjectMeta, false, apimachineryvalidation.NameIsDNSSubdomain, field.NewPath("metadata"))
-	allErrs = append(allErrs, validateResourceSlicePatchSpec(&patch.Spec, nil, field.NewPath("spec"))...)
+	allErrs = append(allErrs, validateResourceSlicePatchSpec(&patch.Spec, field.NewPath("spec"))...)
 	return allErrs
 }
 
 // ValidateResourceSlicePatch tests if a ResourceSlicePatch update is valid.
 func ValidateResourceSlicePatchUpdate(resourceSlicePatch, oldResourceSlicePatch *resource.ResourceSlicePatch) field.ErrorList {
 	allErrs := corevalidation.ValidateObjectMetaUpdate(&resourceSlicePatch.ObjectMeta, &oldResourceSlicePatch.ObjectMeta, field.NewPath("metadata"))
-	allErrs = append(allErrs, validateResourceSlicePatchSpec(&resourceSlicePatch.Spec, &oldResourceSlicePatch.Spec, field.NewPath("spec"))...)
+	allErrs = append(allErrs, validateResourceSlicePatchSpec(&resourceSlicePatch.Spec, field.NewPath("spec"))...)
 	return allErrs
 }
 
-func validateResourceSlicePatchSpec(spec, oldSpec *resource.ResourceSlicePatchSpec, fldPath *field.Path) field.ErrorList {
+func validateResourceSlicePatchSpec(spec *resource.ResourceSlicePatchSpec, fldPath *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
+	allErrs = append(allErrs, validateDevicePatch(&spec.Devices, fldPath.Child("devices"))...)
+	return allErrs
+}
+
+func validateDevicePatch(patch *resource.DevicePatch, fldPath *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+
+	allErrs = append(allErrs, validateDevicePatchFilter(patch.Filter, fldPath.Child("filter"))...)
+
+	maxKeyLen := resource.DeviceMaxDomainLength + 1 + resource.DeviceMaxIDLength
+	allErrs = append(allErrs, validateMap(patch.Attributes, -1, maxKeyLen, validateFullyQualifiedName, validateDeviceAttribute, fldPath.Child("attributes"))...)
+	allErrs = append(allErrs, validateMap(patch.Capacity, -1, maxKeyLen, validateFullyQualifiedName, validateDeviceCapacity, fldPath.Child("capacity"))...)
+	if combinedLen, max := len(patch.Attributes)+len(patch.Capacity), resource.ResourceSliceMaxAttributesAndCapacitiesPerDevice; combinedLen > max {
+		allErrs = append(allErrs, field.Invalid(fldPath, combinedLen, fmt.Sprintf("the total number of attributes and capacities must not exceed %d", max)))
+	}
+
+	return allErrs
+}
+
+func validateDevicePatchFilter(filter *resource.DevicePatchFilter, fldPath *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+	if filter == nil {
+		return allErrs
+	}
+	if filter.DeviceClass != nil {
+		allErrs = append(allErrs, validateDeviceClassName(*filter.DeviceClass, fldPath.Child("deviceClass"))...)
+	}
+	if filter.Driver != nil {
+		allErrs = append(allErrs, validateDriverName(*filter.Driver, fldPath.Child("driver"))...)
+	}
+	if filter.Pool != nil {
+		allErrs = append(allErrs, validatePoolName(*filter.Pool, fldPath.Child("pool"))...)
+	}
+	if filter.Device != nil {
+		allErrs = append(allErrs, validateDeviceName(*filter.Device, fldPath.Child("device"))...)
+	}
+	allErrs = append(allErrs, validateSlice(filter.Selectors, resource.DeviceSelectorsMaxSize,
+		func(selector resource.DeviceSelector, fldPath *field.Path) field.ErrorList {
+			// Since CEL expressions in a ResourceSlicePatch are mutable, then we can't know whether or not
+			// this exact expression has ever been stored persistently.
+			return validateSelector(selector, fldPath, false)
+		},
+		fldPath.Child("selectors"))...)
 	return allErrs
 }

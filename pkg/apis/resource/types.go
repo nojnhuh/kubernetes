@@ -1094,6 +1094,91 @@ type ResourceSlicePatch struct {
 
 // ResourceSlicePatchSpec contains modifications to ResourceSlices.
 type ResourceSlicePatchSpec struct {
+	// Devices defines how to patch device attributes and taints.
+	Devices DevicePatch
+}
+
+// DevicePatch selects one or more devices by class, driver, pool, device names
+// and/or CEL selectors. All of these criteria must be satisfied by a device, otherwise
+// it is ignored by the patch. A DevicePatch with no selection criteria is
+// valid and matches all devices.
+type DevicePatch struct {
+	// Filter defines which device(s) the patch is applied to.
+	//
+	// +optional
+	Filter *DevicePatchFilter
+
+	// If a ResourceSlice and a DevicePatch define the same attribute or
+	// capacity, the value of the DevicePatch is used. If multiple
+	// different DevicePatches match the same device, then the one with
+	// the highest priority wins. If the priorities are the same, it is non-deterministic
+	// which patch is used.
+	Priority int32
+
+	// Attributes defines the set of attributes to patch for matching devices.
+	// The name of each attribute must be unique in that set and
+	// include the domain prefix.
+	//
+	// The maximum number of attributes and capacities in the DevicePatch combined is 32.
+	// This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes
+	// feature gate.
+	//
+	// +optional
+	// +featureGate:DRAAdminControlledDeviceAttributes
+	Attributes map[FullyQualifiedName]DeviceAttribute
+
+	// Capacity defines the set of capacities to patch for matching devices.
+	// The name of each capacity must be unique in that set and
+	// include the domain prefix.
+	//
+	// The maximum number of attributes and capacities in the DevicePatch combined is 32.
+	// This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes
+	// feature gate.
+	//
+	// +optional
+	// +featureGate:DRAAdminControlledDeviceAttributes
+	Capacity map[FullyQualifiedName]DeviceCapacity
+}
+
+// DevicePatchFilter defines which device(s) a [DevicePatch] applies to.
+type DevicePatchFilter struct {
+	// If DeviceClass is set, the selectors defined there must be
+	// satisfied by a device to be patched.
+	//
+	// +optional
+	DeviceClass *string
+
+	// If driver is set, only devices from that driver are patched.
+	//
+	// +optional
+	Driver *string
+
+	// If pool is set, only devices in that pool are patched.
+	//
+	// Also setting the driver name may be useful to avoid
+	// ambiguity when different drivers use the same pool name,
+	// but this is not required because selecting pools from
+	// different drivers may also be useful, for example when
+	// drivers with node-local devices use the node name as
+	// their pool name.
+	//
+	// +optional
+	Pool *string
+
+	// If device is set, only devices with that name are patched.
+	//
+	// Also setting driver and pool may be required to avoid ambiguity,
+	// but is not required.
+	//
+	// +optional
+	Device *string
+
+	// Selectors define criteria which must be satisfied by a
+	// device to be patched. All selectors must be satisfied.
+	//
+	// +optional
+	// +listType=atomic
+	Selectors []DeviceSelector
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
