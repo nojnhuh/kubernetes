@@ -44,6 +44,10 @@ func (c *FakeResourceV1alpha3) ResourceSlices() v1alpha3.ResourceSliceInterface 
 	return newFakeResourceSlices(c)
 }
 
+func (c *FakeResourceV1alpha3) ResourceSlicePatches(namespace string) v1alpha3.ResourceSlicePatchInterface {
+	return newFakeResourceSlicePatches(c, namespace)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeResourceV1alpha3) RESTClient() rest.Interface {
