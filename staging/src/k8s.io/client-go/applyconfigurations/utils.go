@@ -1610,6 +1610,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &resourcev1alpha3.DeviceAllocationResultApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceAttribute"):
 		return &resourcev1alpha3.DeviceAttributeApplyConfiguration{}
+	case v1alpha3.SchemeGroupVersion.WithKind("DeviceCapacity"):
+		return &resourcev1alpha3.DeviceCapacityApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceClaim"):
 		return &resourcev1alpha3.DeviceClaimApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceClaimConfiguration"):
@@ -1624,6 +1626,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &resourcev1alpha3.DeviceConfigurationApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceConstraint"):
 		return &resourcev1alpha3.DeviceConstraintApplyConfiguration{}
+	case v1alpha3.SchemeGroupVersion.WithKind("DevicePatch"):
+		return &resourcev1alpha3.DevicePatchApplyConfiguration{}
+	case v1alpha3.SchemeGroupVersion.WithKind("DevicePatchFilter"):
+		return &resourcev1alpha3.DevicePatchFilterApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceRequest"):
 		return &resourcev1alpha3.DeviceRequestApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("DeviceRequestAllocationResult"):
@@ -1652,6 +1658,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &resourcev1alpha3.ResourceSliceApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("ResourceSlicePatch"):
 		return &resourcev1alpha3.ResourceSlicePatchApplyConfiguration{}
+	case v1alpha3.SchemeGroupVersion.WithKind("ResourceSlicePatchSpec"):
+		return &resourcev1alpha3.ResourceSlicePatchSpecApplyConfiguration{}
 	case v1alpha3.SchemeGroupVersion.WithKind("ResourceSliceSpec"):
 		return &resourcev1alpha3.ResourceSliceSpecApplyConfiguration{}
 

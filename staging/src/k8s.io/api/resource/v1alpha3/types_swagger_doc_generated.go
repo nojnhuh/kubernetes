@@ -112,6 +112,15 @@ func (DeviceAttribute) SwaggerDoc() map[string]string {
 	return map_DeviceAttribute
 }
 
+var map_DeviceCapacity = map[string]string{
+	"":      "DeviceCapacity describes a quantity associated with a device.",
+	"value": "Value defines how much of a certain device capacity is available.",
+}
+
+func (DeviceCapacity) SwaggerDoc() map[string]string {
+	return map_DeviceCapacity
+}
+
 var map_DeviceClaim = map[string]string{
 	"":            "DeviceClaim defines how to request devices with a ResourceClaim.",
 	"requests":    "Requests represent individual requests for distinct devices which must all be satisfied. If empty, nothing needs to be allocated.",
@@ -187,6 +196,31 @@ var map_DeviceConstraint = map[string]string{
 
 func (DeviceConstraint) SwaggerDoc() map[string]string {
 	return map_DeviceConstraint
+}
+
+var map_DevicePatch = map[string]string{
+	"":           "DevicePatch selects one or more devices by class, driver, pool, device names and/or CEL selectors. All of these criteria must be satisfied by a device, otherwise it is ignored by the patch. A DevicePatch with no selection criteria is valid and matches all devices.",
+	"filter":     "Filter defines which device(s) the patch is applied to.",
+	"priority":   "If a ResourceSlice and a DevicePatch define the same attribute or capacity, the value of the DevicePatch is used. If multiple different DevicePatches match the same device, then the one with the highest priority wins. If the priorities are the same, it is non-deterministic which patch is used.",
+	"attributes": "Attributes defines the set of attributes to patch for matching devices. The name of each attribute must be unique in that set and include the domain prefix.\n\nThe maximum number of attributes and capacities in the DevicePatch combined is 32. This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes feature gate.",
+	"capacity":   "Capacity defines the set of capacities to patch for matching devices. The name of each capacity must be unique in that set and include the domain prefix.\n\nThe maximum number of attributes and capacities in the DevicePatch combined is 32. This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes feature gate.",
+}
+
+func (DevicePatch) SwaggerDoc() map[string]string {
+	return map_DevicePatch
+}
+
+var map_DevicePatchFilter = map[string]string{
+	"":            "DevicePatchFilter defines which device(s) a [DevicePatch] applies to.",
+	"deviceClass": "If DeviceClass is set, the selectors defined there must be satisfied by a device to be patched.",
+	"driver":      "If driver is set, only devices from that driver are patched.",
+	"pool":        "If pool is set, only devices in that pool are patched.\n\nAlso setting the driver name may be useful to avoid ambiguity when different drivers use the same pool name, but this is not required because selecting pools from different drivers may also be useful, for example when drivers with node-local devices use the node name as their pool name.",
+	"device":      "If device is set, only devices with that name are patched.\n\nAlso setting driver and pool may be required to avoid ambiguity, but is not required.",
+	"selectors":   "Selectors define criteria which must be satisfied by a device to be patched. All selectors must be satisfied.",
+}
+
+func (DevicePatchFilter) SwaggerDoc() map[string]string {
+	return map_DevicePatchFilter
 }
 
 var map_DeviceRequest = map[string]string{
@@ -381,7 +415,8 @@ func (ResourceSlicePatchList) SwaggerDoc() map[string]string {
 }
 
 var map_ResourceSlicePatchSpec = map[string]string{
-	"": "ResourceSlicePatchSpec contains modifications to ResourceSlices.",
+	"":        "ResourceSlicePatchSpec contains modifications to ResourceSlices.",
+	"devices": "Devices defines how to patch device attributes and taints.",
 }
 
 func (ResourceSlicePatchSpec) SwaggerDoc() map[string]string {

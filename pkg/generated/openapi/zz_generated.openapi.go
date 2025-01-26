@@ -916,6 +916,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"k8s.io/api/resource/v1alpha3.DeviceAllocationConfiguration":                                            schema_k8sio_api_resource_v1alpha3_DeviceAllocationConfiguration(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceAllocationResult":                                                   schema_k8sio_api_resource_v1alpha3_DeviceAllocationResult(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceAttribute":                                                          schema_k8sio_api_resource_v1alpha3_DeviceAttribute(ref),
+		"k8s.io/api/resource/v1alpha3.DeviceCapacity":                                                           schema_k8sio_api_resource_v1alpha3_DeviceCapacity(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceClaim":                                                              schema_k8sio_api_resource_v1alpha3_DeviceClaim(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceClaimConfiguration":                                                 schema_k8sio_api_resource_v1alpha3_DeviceClaimConfiguration(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceClass":                                                              schema_k8sio_api_resource_v1alpha3_DeviceClass(ref),
@@ -924,6 +925,8 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"k8s.io/api/resource/v1alpha3.DeviceClassSpec":                                                          schema_k8sio_api_resource_v1alpha3_DeviceClassSpec(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceConfiguration":                                                      schema_k8sio_api_resource_v1alpha3_DeviceConfiguration(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceConstraint":                                                         schema_k8sio_api_resource_v1alpha3_DeviceConstraint(ref),
+		"k8s.io/api/resource/v1alpha3.DevicePatch":                                                              schema_k8sio_api_resource_v1alpha3_DevicePatch(ref),
+		"k8s.io/api/resource/v1alpha3.DevicePatchFilter":                                                        schema_k8sio_api_resource_v1alpha3_DevicePatchFilter(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceRequest":                                                            schema_k8sio_api_resource_v1alpha3_DeviceRequest(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceRequestAllocationResult":                                            schema_k8sio_api_resource_v1alpha3_DeviceRequestAllocationResult(ref),
 		"k8s.io/api/resource/v1alpha3.DeviceSelector":                                                           schema_k8sio_api_resource_v1alpha3_DeviceSelector(ref),
@@ -47036,6 +47039,28 @@ func schema_k8sio_api_resource_v1alpha3_DeviceAttribute(ref common.ReferenceCall
 	}
 }
 
+func schema_k8sio_api_resource_v1alpha3_DeviceCapacity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "DeviceCapacity describes a quantity associated with a device.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"value": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Value defines how much of a certain device capacity is available.",
+							Ref:         ref("k8s.io/apimachinery/pkg/api/resource.Quantity"),
+						},
+					},
+				},
+				Required: []string{"value"},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/api/resource.Quantity"},
+	}
+}
+
 func schema_k8sio_api_resource_v1alpha3_DeviceClaim(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -47376,6 +47401,128 @@ func schema_k8sio_api_resource_v1alpha3_DeviceConstraint(ref common.ReferenceCal
 				},
 			},
 		},
+	}
+}
+
+func schema_k8sio_api_resource_v1alpha3_DevicePatch(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "DevicePatch selects one or more devices by class, driver, pool, device names and/or CEL selectors. All of these criteria must be satisfied by a device, otherwise it is ignored by the patch. A DevicePatch with no selection criteria is valid and matches all devices.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"filter": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Filter defines which device(s) the patch is applied to.",
+							Ref:         ref("k8s.io/api/resource/v1alpha3.DevicePatchFilter"),
+						},
+					},
+					"priority": {
+						SchemaProps: spec.SchemaProps{
+							Description: "If a ResourceSlice and a DevicePatch define the same attribute or capacity, the value of the DevicePatch is used. If multiple different DevicePatches match the same device, then the one with the highest priority wins. If the priorities are the same, it is non-deterministic which patch is used.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"attributes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Attributes defines the set of attributes to patch for matching devices. The name of each attribute must be unique in that set and include the domain prefix.\n\nThe maximum number of attributes and capacities in the DevicePatch combined is 32. This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes feature gate.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/resource/v1alpha3.DeviceAttribute"),
+									},
+								},
+							},
+						},
+					},
+					"capacity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Capacity defines the set of capacities to patch for matching devices. The name of each capacity must be unique in that set and include the domain prefix.\n\nThe maximum number of attributes and capacities in the DevicePatch combined is 32. This is an alpha field and requires enabling the DRAAdminControlledDeviceAttributes feature gate.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/resource/v1alpha3.DeviceCapacity"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"priority"},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/api/resource/v1alpha3.DeviceAttribute", "k8s.io/api/resource/v1alpha3.DeviceCapacity", "k8s.io/api/resource/v1alpha3.DevicePatchFilter"},
+	}
+}
+
+func schema_k8sio_api_resource_v1alpha3_DevicePatchFilter(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "DevicePatchFilter defines which device(s) a [DevicePatch] applies to.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"deviceClass": {
+						SchemaProps: spec.SchemaProps{
+							Description: "If DeviceClass is set, the selectors defined there must be satisfied by a device to be patched.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"driver": {
+						SchemaProps: spec.SchemaProps{
+							Description: "If driver is set, only devices from that driver are patched.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"pool": {
+						SchemaProps: spec.SchemaProps{
+							Description: "If pool is set, only devices in that pool are patched.\n\nAlso setting the driver name may be useful to avoid ambiguity when different drivers use the same pool name, but this is not required because selecting pools from different drivers may also be useful, for example when drivers with node-local devices use the node name as their pool name.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"device": {
+						SchemaProps: spec.SchemaProps{
+							Description: "If device is set, only devices with that name are patched.\n\nAlso setting driver and pool may be required to avoid ambiguity, but is not required.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"selectors": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Selectors define criteria which must be satisfied by a device to be patched. All selectors must be satisfied.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("k8s.io/api/resource/v1alpha3.DeviceSelector"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/api/resource/v1alpha3.DeviceSelector"},
 	}
 }
 
@@ -48199,8 +48346,20 @@ func schema_k8sio_api_resource_v1alpha3_ResourceSlicePatchSpec(ref common.Refere
 			SchemaProps: spec.SchemaProps{
 				Description: "ResourceSlicePatchSpec contains modifications to ResourceSlices.",
 				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"devices": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Devices defines how to patch device attributes and taints.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("k8s.io/api/resource/v1alpha3.DevicePatch"),
+						},
+					},
+				},
+				Required: []string{"devices"},
 			},
 		},
+		Dependencies: []string{
+			"k8s.io/api/resource/v1alpha3.DevicePatch"},
 	}
 }
 

@@ -12569,6 +12569,12 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: version
       type:
         scalar: string
+- name: io.k8s.api.resource.v1alpha3.DeviceCapacity
+  map:
+    fields:
+    - name: value
+      type:
+        namedType: io.k8s.apimachinery.pkg.api.resource.Quantity
 - name: io.k8s.api.resource.v1alpha3.DeviceClaim
   map:
     fields:
@@ -12651,6 +12657,47 @@ var schemaYAML = typed.YAMLObject(`types:
         list:
           elementType:
             scalar: string
+          elementRelationship: atomic
+- name: io.k8s.api.resource.v1alpha3.DevicePatch
+  map:
+    fields:
+    - name: attributes
+      type:
+        map:
+          elementType:
+            namedType: io.k8s.api.resource.v1alpha3.DeviceAttribute
+    - name: capacity
+      type:
+        map:
+          elementType:
+            namedType: io.k8s.api.resource.v1alpha3.DeviceCapacity
+    - name: filter
+      type:
+        namedType: io.k8s.api.resource.v1alpha3.DevicePatchFilter
+    - name: priority
+      type:
+        scalar: numeric
+      default: 0
+- name: io.k8s.api.resource.v1alpha3.DevicePatchFilter
+  map:
+    fields:
+    - name: device
+      type:
+        scalar: string
+    - name: deviceClass
+      type:
+        scalar: string
+    - name: driver
+      type:
+        scalar: string
+    - name: pool
+      type:
+        scalar: string
+    - name: selectors
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.api.resource.v1alpha3.DeviceSelector
           elementRelationship: atomic
 - name: io.k8s.api.resource.v1alpha3.DeviceRequest
   map:
@@ -12880,16 +12927,11 @@ var schemaYAML = typed.YAMLObject(`types:
       default: {}
 - name: io.k8s.api.resource.v1alpha3.ResourceSlicePatchSpec
   map:
-    elementType:
-      scalar: untyped
-      list:
-        elementType:
-          namedType: __untyped_atomic_
-        elementRelationship: atomic
-      map:
-        elementType:
-          namedType: __untyped_deduced_
-        elementRelationship: separable
+    fields:
+    - name: devices
+      type:
+        namedType: io.k8s.api.resource.v1alpha3.DevicePatch
+      default: {}
 - name: io.k8s.api.resource.v1alpha3.ResourceSliceSpec
   map:
     fields:
