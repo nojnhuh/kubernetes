@@ -19,16 +19,22 @@ package dynamicresources
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
+	"github.com/google/go-cmp/cmp"
+	resourcealphaapi "k8s.io/api/resource/v1alpha3"
 	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
+	resourcealphalisters "k8s.io/client-go/listers/resource/v1alpha3"
 	resourcelisters "k8s.io/client-go/listers/resource/v1beta1"
 	"k8s.io/dynamic-resource-allocation/structured"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/util/assumecache"
 )
@@ -53,8 +59,11 @@ func NewDRAManager(ctx context.Context, claimsCache *assumecache.AssumeCache, in
 			allocatedDevices:    newAllocatedDevices(logger),
 			logger:              logger,
 		},
-		resourceSliceLister: &resourceSliceLister{sliceLister: informerFactory.Resource().V1beta1().ResourceSlices().Lister()},
-		deviceClassLister:   &deviceClassLister{classLister: informerFactory.Resource().V1beta1().DeviceClasses().Lister()},
+		resourceSliceLister: &resourceSliceLister{
+			sliceLister:      informerFactory.Resource().V1beta1().ResourceSlices().Lister(),
+			slicePatchLister: informerFactory.Resource().V1alpha3().ResourceSlicePatches().Lister(),
+		},
+		deviceClassLister: &deviceClassLister{classLister: informerFactory.Resource().V1beta1().DeviceClasses().Lister()},
 	}
 
 	// Reacting to events is more efficient than iterating over the list
@@ -79,11 +88,75 @@ func (s *DefaultDRAManager) DeviceClasses() framework.DeviceClassLister {
 var _ framework.ResourceSliceLister = &resourceSliceLister{}
 
 type resourceSliceLister struct {
-	sliceLister resourcelisters.ResourceSliceLister
+	sliceLister      resourcelisters.ResourceSliceLister
+	slicePatchLister resourcealphalisters.ResourceSlicePatchLister
 }
 
 func (l *resourceSliceLister) List() ([]*resourceapi.ResourceSlice, error) {
-	return l.sliceLister.List(labels.Everything())
+	patches, err := l.slicePatchLister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(patches, func(p1, p2 *resourcealphaapi.ResourceSlicePatch) int {
+		return int(p1.Spec.Devices.Priority - p2.Spec.Devices.Priority)
+	})
+	slices, err := l.sliceLister.List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	patchedSlices := make([]*resourceapi.ResourceSlice, 0, len(slices))
+	for _, slice := range slices {
+		patchedSlice := slice.DeepCopy()
+		// TODO: filter on device class, selectors
+		for _, patch := range patches {
+			filter := patch.Spec.Devices.Filter
+			if filter != nil {
+				if filter.Driver != nil && *filter.Driver != patchedSlice.Spec.Driver {
+					continue
+				}
+				if filter.Pool != nil && *filter.Pool != patchedSlice.Spec.Pool.Name {
+					continue
+				}
+			}
+			for dIndex, device := range patchedSlice.Spec.Devices {
+				if filter != nil {
+					if filter.Device != nil && *filter.Device != device.Name {
+						continue
+					}
+				}
+				if device.Basic == nil {
+					continue
+				}
+
+				if utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminControlledDeviceAttributes) {
+					newAttrs := patchedSlice.Spec.Devices[dIndex].Basic.Attributes
+					if newAttrs == nil {
+						newAttrs = make(map[resourceapi.QualifiedName]resourceapi.DeviceAttribute)
+					}
+					for key, val := range patch.Spec.Devices.Attributes {
+						newKey := resourceapi.QualifiedName(key)
+						newVal := resourceapi.DeviceAttribute(val)
+						newAttrs[newKey] = newVal
+					}
+					patchedSlice.Spec.Devices[dIndex].Basic.Attributes = newAttrs
+
+					newCaps := patchedSlice.Spec.Devices[dIndex].Basic.Capacity
+					if newCaps == nil {
+						newCaps = make(map[resourceapi.QualifiedName]resourceapi.DeviceCapacity)
+					}
+					for key, val := range patch.Spec.Devices.Capacity {
+						newKey := resourceapi.QualifiedName(key)
+						newVal := resourceapi.DeviceCapacity(val)
+						newCaps[newKey] = newVal
+					}
+					patchedSlice.Spec.Devices[dIndex].Basic.Capacity = newCaps
+				}
+			}
+		}
+		patchedSlices = append(patchedSlices, patchedSlice)
+		klog.InfoS("using patched slice", "name", patchedSlice.Name, "diff", cmp.Diff(slice, patchedSlice))
+	}
+	return patchedSlices, nil
 }
 
 var _ framework.DeviceClassLister = &deviceClassLister{}
