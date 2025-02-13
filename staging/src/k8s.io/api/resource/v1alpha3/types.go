@@ -1186,7 +1186,7 @@ type DevicePatchFilter struct {
 	// to class.metadata.name.
 	//
 	// +optional
-	DeviceClassName *string `json:"deviceClass,omitempty" protobuf:"bytes,1,opt,name=deviceClass"`
+	DeviceClassName *string `json:"deviceClassName,omitempty" protobuf:"bytes,1,opt,name=deviceClassName"`
 
 	// If driver is set, only devices from that driver are patched.
 	// This fields corresponds to slice.spec.driver.

@@ -881,7 +881,7 @@ func validateResourceSlicePatchSpec(spec, oldSpec *resource.ResourceSlicePatchSp
 
 	var oldDevices *resource.DevicePatch
 	if oldSpec != nil {
-		oldDevices = &oldSpec.Devices
+		oldDevices = &oldSpec.Devices // +k8s:verify-mutation:reason=clone
 	}
 	allErrs = append(allErrs, validateDevicePatch(&spec.Devices, oldDevices, fldPath.Child("devices"))...)
 
@@ -893,7 +893,7 @@ func validateDevicePatch(patch, oldPatch *resource.DevicePatch, fldPath *field.P
 
 	var oldFilter *resource.DevicePatchFilter
 	if oldPatch != nil {
-		oldFilter = oldPatch.Filter
+		oldFilter = oldPatch.Filter // +k8s:verify-mutation:reason=clone
 	}
 	allErrs = append(allErrs, validateDevicePatchFilter(patch.Filter, oldFilter, fldPath.Child("filter"))...)
 
