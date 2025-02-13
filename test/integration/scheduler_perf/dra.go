@@ -279,7 +279,11 @@ func (op *allocResourceClaimsOp) run(tCtx ktesting.TContext) {
 	informerFactory := informers.NewSharedInformerFactory(tCtx.Client(), 0)
 	claimInformer := informerFactory.Resource().V1beta1().ResourceClaims().Informer()
 	nodeLister := informerFactory.Core().V1().Nodes().Lister()
-	resourceSliceTracker, err := resourceslicetracker.StartTracker(tCtx, tCtx.Client(), informerFactory)
+	resourceSliceTrackerOpts := resourceslicetracker.Options{
+		EnableAdminControlledAttributes: utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminControlledDeviceAttributes),
+		KubeClient:                      tCtx.Client(),
+	}
+	resourceSliceTracker, err := resourceslicetracker.StartTracker(tCtx, informerFactory, resourceSliceTrackerOpts)
 	tCtx.ExpectNoError(err, "start resource slice tracker")
 	draManager := dynamicresources.NewDRAManager(tCtx, assumecache.NewAssumeCache(tCtx.Logger(), claimInformer, "ResourceClaim", "", nil), resourceSliceTracker, tCtx.Client(), informerFactory)
 	informerFactory.Start(tCtx.Done())

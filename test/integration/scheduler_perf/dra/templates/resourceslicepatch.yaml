@@ -6,7 +6,7 @@ spec:
   devices:
     priority: {{ .Index }}
     filter:
-      deviceClass: test-class
+      deviceClassName: test-class
       pool: scheduler-perf-dra-{{ .Index }}
     attributes:
       dra.example.com/patched:
