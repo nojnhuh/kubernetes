@@ -32,13 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kubernetes/pkg/features"
-	"k8s.io/kubernetes/test/utils/ktesting"
+	"k8s.io/klog/v2/ktesting"
 	"k8s.io/utils/ptr"
 )
 
@@ -1501,8 +1498,6 @@ func TestListPatchedResourceSlices(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_, ctx := ktesting.NewTestContext(t)
 
-			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminControlledDeviceAttributes, !test.adminAttrsDisabled)
-
 			inputObjects := make([]runtime.Object, 0, len(test.initialSlices)+len(test.initialClasses))
 			for _, obj := range test.initialSlices {
 				inputObjects = append(inputObjects, obj.DeepCopyObject())
@@ -1542,7 +1537,10 @@ func TestListPatchedResourceSlices(t *testing.T) {
 				},
 			}
 
-			tracker := newTracker(informerFactory)
+			opts := Options{
+				EnableAdminControlledAttributes: !test.adminAttrsDisabled,
+			}
+			tracker := newTracker(informerFactory, opts)
 			initialObjs := make([]any, 0, len(test.initialCachedSlices))
 			for _, obj := range test.initialCachedSlices {
 				initialObjs = append(initialObjs, obj)

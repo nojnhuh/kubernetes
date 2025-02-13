@@ -31,21 +31,21 @@ import (
 	resourceapi "k8s.io/api/resource/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/dynamic-resource-allocation/cel"
 	"k8s.io/klog/v2"
-	"k8s.io/kubectl/pkg/scheme"
-	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/util/queue"
 	"k8s.io/utils/ptr"
 )
 
 type Tracker struct {
+	enableAdminControlledAttributes bool
+
 	resourceSlices        cache.SharedIndexInformer
 	resourceSlicePatches  cache.SharedIndexInformer
 	deviceClasses         cache.SharedIndexInformer
@@ -80,18 +80,29 @@ type Tracker struct {
 	eventQueue queue.FIFO[func()]
 }
 
-func StartTracker(ctx context.Context, kubeClient kubernetes.Interface, informerFactory informers.SharedInformerFactory) (*Tracker, error) {
-	t := newTracker(informerFactory)
-	return t, t.start(ctx, kubeClient)
+type Options struct {
+	// EnableAdminControlledAttributes controls whether device
+	// attributes and capacities will be reflected in patched
+	// ResourceSlices.
+	EnableAdminControlledAttributes bool
+	// KubeClient is used to generate Events when CEL expressions in
+	// ResourceSlicePatches encounter runtime errors.
+	KubeClient kubernetes.Interface
 }
 
-func newTracker(informerFactory informers.SharedInformerFactory) *Tracker {
+func StartTracker(ctx context.Context, informerFactory informers.SharedInformerFactory, opts Options) (*Tracker, error) {
+	t := newTracker(informerFactory, opts)
+	return t, t.start(ctx, opts.KubeClient)
+}
+
+func newTracker(informerFactory informers.SharedInformerFactory, opts Options) *Tracker {
 	t := &Tracker{
-		resourceSlices:        informerFactory.Resource().V1beta1().ResourceSlices().Informer(),
-		resourceSlicePatches:  informerFactory.Resource().V1alpha3().ResourceSlicePatches().Informer(),
-		deviceClasses:         informerFactory.Resource().V1beta1().DeviceClasses().Informer(),
-		celCache:              cel.NewCache(10), // TODO: share cache with scheduler
-		patchedResourceSlices: cache.NewStore(cache.MetaNamespaceKeyFunc),
+		enableAdminControlledAttributes: opts.EnableAdminControlledAttributes,
+		resourceSlices:                  informerFactory.Resource().V1beta1().ResourceSlices().Informer(),
+		resourceSlicePatches:            informerFactory.Resource().V1alpha3().ResourceSlicePatches().Informer(),
+		deviceClasses:                   informerFactory.Resource().V1beta1().DeviceClasses().Informer(),
+		celCache:                        cel.NewCache(10), // TODO: share cache with scheduler
+		patchedResourceSlices:           cache.NewStore(cache.MetaNamespaceKeyFunc),
 	}
 	t.handlerRegistration = handlerRegistrationFunc(func() bool {
 		return t.resourceSlices.HasSynced() &&
@@ -469,7 +480,7 @@ func (t *Tracker) syncSlice(ctx context.Context, name string) error {
 				}
 			}
 
-			if utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminControlledDeviceAttributes) {
+			if t.enableAdminControlledAttributes {
 				newAttrs := maps.Clone(deviceAttributes)
 				if newAttrs == nil {
 					newAttrs = make(map[resourceapi.QualifiedName]resourceapi.DeviceAttribute)
