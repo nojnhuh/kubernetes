@@ -46,7 +46,7 @@ spec:
         value: "0"
     filter:
       device: deviceValue
-      deviceClass: deviceClassValue
+      deviceClassName: deviceClassNameValue
       driver: driverValue
       pool: poolValue
       selectors:

@@ -47475,7 +47475,7 @@ func schema_k8sio_api_resource_v1alpha3_DevicePatchFilter(ref common.ReferenceCa
 				Description: "DevicePatchFilter defines which device(s) a [DevicePatch] applies to.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"deviceClass": {
+					"deviceClassName": {
 						SchemaProps: spec.SchemaProps{
 							Description: "If DeviceClassName is set, the selectors defined there must be satisfied by a device to be patched. This field corresponds to class.metadata.name.",
 							Type:        []string{"string"},

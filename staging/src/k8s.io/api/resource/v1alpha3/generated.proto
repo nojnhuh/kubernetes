@@ -459,7 +459,7 @@ message DevicePatchFilter {
   // to class.metadata.name.
   //
   // +optional
-  optional string deviceClass = 1;
+  optional string deviceClassName = 1;
 
   // If driver is set, only devices from that driver are patched.
   // This fields corresponds to slice.spec.driver.

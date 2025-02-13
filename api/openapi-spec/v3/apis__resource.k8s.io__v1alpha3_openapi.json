@@ -601,7 +601,7 @@
             "description": "If device is set, only devices with that name are patched. This field corresponds to slice.spec.devices[].name.\n\nSetting also driver and pool may be required to avoid ambiguity, but is not required.",
             "type": "string"
           },
-          "deviceClass": {
+          "deviceClassName": {
             "description": "If DeviceClassName is set, the selectors defined there must be satisfied by a device to be patched. This field corresponds to class.metadata.name.",
             "type": "string"
           },

@@ -12683,7 +12683,7 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: device
       type:
         scalar: string
-    - name: deviceClass
+    - name: deviceClassName
       type:
         scalar: string
     - name: driver

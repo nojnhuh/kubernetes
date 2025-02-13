@@ -46,7 +46,7 @@
   "spec": {
     "devices": {
       "filter": {
-        "deviceClass": "deviceClassValue",
+        "deviceClassName": "deviceClassNameValue",
         "driver": "driverValue",
         "pool": "poolValue",
         "device": "deviceValue",

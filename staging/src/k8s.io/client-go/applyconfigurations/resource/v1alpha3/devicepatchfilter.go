@@ -21,7 +21,7 @@ package v1alpha3
 // DevicePatchFilterApplyConfiguration represents a declarative configuration of the DevicePatchFilter type for use
 // with apply.
 type DevicePatchFilterApplyConfiguration struct {
-	DeviceClassName *string                            `json:"deviceClass,omitempty"`
+	DeviceClassName *string                            `json:"deviceClassName,omitempty"`
 	Driver          *string                            `json:"driver,omitempty"`
 	Pool            *string                            `json:"pool,omitempty"`
 	Device          *string                            `json:"device,omitempty"`

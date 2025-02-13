@@ -211,12 +211,12 @@ func (DevicePatch) SwaggerDoc() map[string]string {
 }
 
 var map_DevicePatchFilter = map[string]string{
-	"":            "DevicePatchFilter defines which device(s) a [DevicePatch] applies to.",
-	"deviceClass": "If DeviceClassName is set, the selectors defined there must be satisfied by a device to be patched. This field corresponds to class.metadata.name.",
-	"driver":      "If driver is set, only devices from that driver are patched. This fields corresponds to slice.spec.driver.",
-	"pool":        "If pool is set, only devices in that pool are patched.\n\nAlso setting the driver name may be useful to avoid ambiguity when different drivers use the same pool name, but this is not required because selecting pools from different drivers may also be useful, for example when drivers with node-local devices use the node name as their pool name.",
-	"device":      "If device is set, only devices with that name are patched. This field corresponds to slice.spec.devices[].name.\n\nSetting also driver and pool may be required to avoid ambiguity, but is not required.",
-	"selectors":   "Selectors define criteria which must be satisfied by a device to be patched. All selectors must be satisfied.",
+	"":                "DevicePatchFilter defines which device(s) a [DevicePatch] applies to.",
+	"deviceClassName": "If DeviceClassName is set, the selectors defined there must be satisfied by a device to be patched. This field corresponds to class.metadata.name.",
+	"driver":          "If driver is set, only devices from that driver are patched. This fields corresponds to slice.spec.driver.",
+	"pool":            "If pool is set, only devices in that pool are patched.\n\nAlso setting the driver name may be useful to avoid ambiguity when different drivers use the same pool name, but this is not required because selecting pools from different drivers may also be useful, for example when drivers with node-local devices use the node name as their pool name.",
+	"device":          "If device is set, only devices with that name are patched. This field corresponds to slice.spec.devices[].name.\n\nSetting also driver and pool may be required to avoid ambiguity, but is not required.",
+	"selectors":       "Selectors define criteria which must be satisfied by a device to be patched. All selectors must be satisfied.",
 }
 
 func (DevicePatchFilter) SwaggerDoc() map[string]string {
