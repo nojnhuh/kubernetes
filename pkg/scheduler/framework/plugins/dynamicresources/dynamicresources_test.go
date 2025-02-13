@@ -1077,7 +1077,11 @@ func setup(t *testing.T, nodes []*v1.Node, claims []*resourceapi.ResourceClaim, 
 	tc.client.PrependReactor("*", "*", reactor)
 
 	tc.informerFactory = informers.NewSharedInformerFactory(tc.client, 0)
-	resourceSliceTracker, err := resourceslicetracker.StartTracker(tCtx, tc.client, tc.informerFactory)
+	resourceSliceTrackerOpts := resourceslicetracker.Options{
+		EnableAdminControlledAttributes: true,
+		KubeClient:                      tc.client,
+	}
+	resourceSliceTracker, err := resourceslicetracker.StartTracker(tCtx, tc.informerFactory, resourceSliceTrackerOpts)
 	require.NoError(t, err, "couldn't start resource slice tracker")
 	tc.draManager = NewDRAManager(tCtx, assumecache.NewAssumeCache(tCtx.Logger(), tc.informerFactory.Resource().V1beta1().ResourceClaims().Informer(), "resource claim", "", nil), resourceSliceTracker, tc.client, tc.informerFactory)
 	opts := []runtime.Option{

@@ -303,7 +303,11 @@ func New(ctx context.Context,
 	if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
 		resourceClaimInformer := informerFactory.Resource().V1beta1().ResourceClaims().Informer()
 		resourceClaimCache = assumecache.NewAssumeCache(logger, resourceClaimInformer, "ResourceClaim", "", nil)
-		resourceSliceTracker, err = resourceslicetracker.StartTracker(ctx, client, informerFactory)
+		resourceSliceTrackerOpts := resourceslicetracker.Options{
+			EnableAdminControlledAttributes: utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminControlledDeviceAttributes),
+			KubeClient:                      client,
+		}
+		resourceSliceTracker, err = resourceslicetracker.StartTracker(ctx, informerFactory, resourceSliceTrackerOpts)
 		if err != nil {
 			return nil, fmt.Errorf("couldn't start resource slice tracker: %w", err)
 		}

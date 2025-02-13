@@ -372,7 +372,7 @@ func TestAddAllEventHandlers(t *testing.T) {
 				resourceClaimInformer := informerFactory.Resource().V1beta1().ResourceClaims().Informer()
 				resourceClaimCache = assumecache.NewAssumeCache(logger, resourceClaimInformer, "ResourceClaim", "", nil)
 				var err error
-				resourceSliceTracker, err = resourceslicetracker.StartTracker(ctx, nil, informerFactory)
+				resourceSliceTracker, err = resourceslicetracker.StartTracker(ctx, informerFactory, resourceslicetracker.Options{})
 				if err != nil {
 					t.Fatalf("couldn't start resource slice tracker: %v", err)
 				}
