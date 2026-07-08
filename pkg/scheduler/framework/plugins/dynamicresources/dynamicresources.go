@@ -940,7 +940,6 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 		logger.V(5).Info("No new claims to deallocate", "pod", klog.KObj(pod))
 		return nil, fwk.NewStatus(fwk.Unschedulable)
 	}
-	extendedResourceClaim := state.claims.extendedResourceClaim()
 
 	podGroup, err := pl.getPodGroupSnapshot(pod)
 	if err != nil {
@@ -961,6 +960,7 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 		podGroupActive = podGroupState.ScheduledPodsCount() > 0
 	}
 
+	extendedResourceClaim := state.claims.extendedResourceClaim()
 	// Iterating over a map is random. This is intentional here, we want to
 	// pick one claim randomly because there is no better heuristic.
 	for index := range state.unavailableClaims {
