@@ -945,7 +945,7 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 	if err != nil {
 		return nil, statusError(logger, err)
 	}
-	podGroupActive := false
+	podGroupInactive := true
 	if podGroup != nil {
 		logger = logger.WithValues("podgroup", klog.KObj(podGroup))
 		// The podGroupState lister is based on the live cache and does not consider
@@ -957,7 +957,14 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 		if err != nil {
 			return nil, statusError(logger, err)
 		}
-		podGroupActive = podGroupState.ScheduledPodsCount() > 0
+		// Since this is part of the synchronous PodGroup scheduling cycle, we
+		// know that if the PodGroup is inactive, then it will stay inactive, so
+		// it is safe to deallocate its claims.
+		//
+		// If this state is not updated yet and says the PodGroup is active when
+		// it actually isn't, then a future scheduling cycle will eventually
+		// read the updated state and deallocate a claim.
+		podGroupInactive = podGroupState.ScheduledPodsCount() == 0
 	}
 
 	extendedResourceClaim := state.claims.extendedResourceClaim()
@@ -976,7 +983,7 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 		reservedForNobody := len(claim.Status.ReservedFor) == 0
 		reservedForOnlyThisPod := len(claim.Status.ReservedFor) == 1 && claim.Status.ReservedFor[0].UID == pod.UID
 		reservedForOnlyThisPodGroup := podGroup != nil &&
-			!podGroupActive &&
+			podGroupInactive &&
 			len(claim.Status.ReservedFor) == 1 &&
 			claim.Status.ReservedFor[0].UID == podGroup.UID
 
@@ -1275,7 +1282,18 @@ func (pl *DynamicResources) Unreserve(ctx context.Context, cs fwk.CycleState, po
 				logger.V(5).Info("Error getting scheduler state for PodGroup, not unreserving claim for PodGroup", "err", err, "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
 				continue
 			}
-			if podGroupState.ScheduledPodsCount() > 0 {
+			// During the asynchronous binding cycle, this Pod is the only one allowed
+			// to have been scheduled before unreserving the claim for the PodGroup.
+			maxPodGroupPodsToUnreserve := 1
+			if cs.IsPodGroupSchedulingCycle() {
+				// During the synchronous scheduling cycle, even this Pod has not yet
+				// been scheduled.
+				maxPodGroupPodsToUnreserve = 0
+			}
+			// If ScheduledPodsCount has not caught up to reality and there
+			// actually are not any other scheduled Pods, then PostFilter will
+			// check later if the PodGroup can be removed from status.reservedFor.
+			if podGroupState.ScheduledPodsCount() > maxPodGroupPodsToUnreserve {
 				logger.V(6).Info("Not unreserving claim for PodGroup with other scheduled Pods", "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
 				continue
 			}

@@ -227,6 +227,12 @@ var (
 				PodResourceClaims(v1.PodResourceClaim{Name: resourceName, ResourceClaimName: &claimName}).
 				PodGroupName(podGroupName).
 				Obj()
+	groupedPodWithClaimNameScheduled = st.MakePod().Name(podName).Namespace(namespace).
+						UID(podUID).
+						Node(nodeName).
+						PodResourceClaims(v1.PodResourceClaim{Name: resourceName, ResourceClaimName: &claimName}).
+						PodGroupName(podGroupName).
+						Obj()
 	groupedPodWithClaimTemplateInStatus = func() *v1.Pod {
 		pod := podWithClaimTemplateInStatus.DeepCopy()
 		pod.Spec.SchedulingGroup = &v1.PodSchedulingGroup{
@@ -2075,7 +2081,10 @@ func testPlugin(tCtx ktesting.TContext) {
 			podGroups:                       []*schedulingapi.PodGroup{podGroupWithClaimName},
 			objs: []apiruntime.Object{
 				// Pods in the PodGroup
-				groupedPodWithClaimName,
+
+				// This Pod has been scheduled, but it's the only one left in
+				// the PodGroup, so the claim can be unreserved.
+				groupedPodWithClaimNameScheduled,
 			},
 			claims: []*resourceapi.ResourceClaim{allocatedPodGroupClaim},
 			want: want{
@@ -2109,7 +2118,7 @@ func testPlugin(tCtx ktesting.TContext) {
 			podGroups:                       []*schedulingapi.PodGroup{podGroupWithClaimName},
 			objs: []apiruntime.Object{
 				// Pods in the PodGroup
-				groupedPodWithClaimName,
+				groupedPodWithClaimNameScheduled,
 				st.MakePod().Name(podName + "-2").Namespace(namespace).
 					Node(nodeName). // Scheduled, this Pod still needs the PodGroup's claim
 					PodGroupName(podGroupName).
