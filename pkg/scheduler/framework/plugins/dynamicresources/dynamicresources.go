@@ -1255,45 +1255,47 @@ func (pl *DynamicResources) Unreserve(ctx context.Context, cs fwk.CycleState, po
 			}
 		}
 
-		if claim.Status.Allocation != nil {
-			var reservedUID types.UID
-			unreservedLogValues := []any{"resourceclaim", klog.KObj(claim)}
-			if resourceclaim.IsReservedForPod(pod, claim, false /* acceptPodGroupReservation */) {
-				reservedUID = pod.UID
-				unreservedLogValues = append(unreservedLogValues, "pod", klog.KObj(pod))
-			} else if pl.fts.EnableDRAWorkloadResourceClaims && resourceclaim.IsReservedForPod(pod, claim, true /* acceptPodGroupReservation */) {
-				// The podGroupState lister is based on the live cache and does not consider
-				// pods assumed within the PodGroup scheduling cycle, but the ones that
-				// happened before or outside the scheduling cycle. We use it to check
-				// whether there were no assumed or assigned pods that would use the
-				// ResourceClaim.
-				podGroupState, err := pl.fh.PodGroupManager().PodGroupStates().Get(pod.Namespace, *pod.Spec.SchedulingGroup.PodGroupName)
-				if err != nil {
-					logger.V(5).Info("Error getting scheduler state for PodGroup, not unreserving claim for PodGroup", "err", err, "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
-					continue
-				}
-				if podGroupState.ScheduledPodsCount() > 0 {
-					logger.V(6).Info("Not unreserving claim for PodGroup with other scheduled Pods", "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
-					continue
-				}
-				reservedUID = podGroup.UID
-				unreservedLogValues = append(unreservedLogValues, "podgroup", klog.KObj(podGroup))
-			} else {
+		if claim.Status.Allocation == nil {
+			continue
+		}
+
+		var reservedUID types.UID
+		unreservedLogValues := []any{"resourceclaim", klog.KObj(claim)}
+		if resourceclaim.IsReservedForPod(pod, claim, false /* acceptPodGroupReservation */) {
+			reservedUID = pod.UID
+			unreservedLogValues = append(unreservedLogValues, "pod", klog.KObj(pod))
+		} else if pl.fts.EnableDRAWorkloadResourceClaims && resourceclaim.IsReservedForPod(pod, claim, true /* acceptPodGroupReservation */) {
+			// The podGroupState lister is based on the live cache and does not consider
+			// pods assumed within the PodGroup scheduling cycle, but the ones that
+			// happened before or outside the scheduling cycle. We use it to check
+			// whether there were no assumed or assigned pods that would use the
+			// ResourceClaim.
+			podGroupState, err := pl.fh.PodGroupManager().PodGroupStates().Get(pod.Namespace, *pod.Spec.SchedulingGroup.PodGroupName)
+			if err != nil {
+				logger.V(5).Info("Error getting scheduler state for PodGroup, not unreserving claim for PodGroup", "err", err, "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
 				continue
 			}
-			// Remove Pod or PodGroup from ReservedFor. A strategic-merge-patch is used
-			// because that allows removing an individual entry without having
-			// the latest ResourceClaim.
-			patch := fmt.Sprintf(`{"metadata": {"uid": %q}, "status": { "reservedFor": [ {"$patch": "delete", "uid": %q} ] }}`,
-				claim.UID,
-				reservedUID,
-			)
-			logger.V(5).Info("unreserve", unreservedLogValues...)
-			claim, err := pl.clientset.ResourceV1().ResourceClaims(claim.Namespace).Patch(ctx, claim.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{}, "status")
-			if err != nil {
-				// We will get here again when pod scheduling is retried.
-				logger.Error(err, "unreserve", "resourceclaim", klog.KObj(claim))
+			if podGroupState.ScheduledPodsCount() > 0 {
+				logger.V(6).Info("Not unreserving claim for PodGroup with other scheduled Pods", "resourceclaim", klog.KObj(claim), "podgroup", klog.KObj(podGroup))
+				continue
 			}
+			reservedUID = podGroup.UID
+			unreservedLogValues = append(unreservedLogValues, "podgroup", klog.KObj(podGroup))
+		} else {
+			continue
+		}
+		// Remove Pod or PodGroup from ReservedFor. A strategic-merge-patch is used
+		// because that allows removing an individual entry without having
+		// the latest ResourceClaim.
+		patch := fmt.Sprintf(`{"metadata": {"uid": %q}, "status": { "reservedFor": [ {"$patch": "delete", "uid": %q} ] }}`,
+			claim.UID,
+			reservedUID,
+		)
+		logger.V(5).Info("unreserve", unreservedLogValues...)
+		claim, err := pl.clientset.ResourceV1().ResourceClaims(claim.Namespace).Patch(ctx, claim.Name, types.StrategicMergePatchType, []byte(patch), metav1.PatchOptions{}, "status")
+		if err != nil {
+			// We will get here again when pod scheduling is retried.
+			logger.Error(err, "unreserve", "resourceclaim", klog.KObj(claim))
 		}
 	}
 	pl.unreserveExtendedResourceClaim(ctx, pod, state)
