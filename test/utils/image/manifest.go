@@ -209,13 +209,13 @@ const (
 func initImageConfigs(list RegistryList) (map[ImageID]Config, map[ImageID]Config) {
 	configs := map[ImageID]Config{}
 	configs[AgnhostPrev] = Config{list.PromoterE2eRegistry, "agnhost", "2.55"}
-	configs[Agnhost] = Config{list.PromoterE2eRegistry, "agnhost", "2.65.0"}
+	configs[Agnhost] = Config{list.PromoterE2eRegistry, "agnhost", "2.66.0"}
 	configs[AgnhostPrivate] = Config{list.PrivateRegistry, "agnhost", "2.6"}
 	configs[APIServer] = Config{list.PromoterE2eRegistry, "sample-apiserver", "1.29.2"}
 	configs[AppArmorLoader] = Config{list.PromoterE2eRegistry, "apparmor-loader", "1.4"}
 	configs[BusyBox] = Config{list.PromoterE2eRegistry, "busybox", "1.37.0-2"}
 	configs[DistrolessIptables] = Config{list.BuildImageRegistry, "distroless-iptables", "v0.9.3"}
-	configs[Etcd] = Config{list.GcEtcdRegistry, "etcd", "3.7.0-rc.0-0"}
+	configs[Etcd] = Config{list.GcEtcdRegistry, "etcd", "3.7.0-0"}
 	configs[InvalidRegistryImage] = Config{list.InvalidRegistry, "alpine", "3.1"}
 	configs[IpcUtils] = Config{list.PromoterE2eRegistry, "ipc-utils", "1.4"}
 	configs[GlibcDnsTesting] = Config{list.PromoterE2eRegistry, "glibc-dns-testing", "2.0.0"}

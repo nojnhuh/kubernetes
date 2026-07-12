@@ -2340,6 +2340,7 @@ type PersistentVolumeClaimTemplate struct {
 	// validation.
 	//
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// The specification for the PersistentVolumeClaim. The entire content is
@@ -5532,6 +5533,7 @@ type PodTemplateSpec struct {
 	// Standard object's metadata.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// Specification of the desired behavior of the pod.
@@ -6909,6 +6911,37 @@ const (
 	NodePIDPressure NodeConditionType = "PIDPressure"
 	// NodeNetworkUnavailable means that network for the node is not correctly configured.
 	NodeNetworkUnavailable NodeConditionType = "NetworkUnavailable"
+	// NodeGracefulNodeShutdownInProgress reports whether Graceful Node Shutdown is determined to be in progress on this Node.
+	//
+	// The admin is responsible for setting and clearing this condition.
+	NodeGracefulNodeShutdownInProgress NodeConditionType = "GracefulNodeShutdownInProgress"
+	// NodeDrainInProgress reports that this Node is actively being drained,
+	// according to the admin's definition of drain.
+	// Commonly, this involves removing some amount of Pods, volumes, and networks.
+	//
+	// The admin is responsible for setting and clearing this condition.
+	NodeDrainInProgress NodeConditionType = "DrainInProgress"
+	// NodeDrained reports that this Node has reached the drain criteria selected by the admin.
+	//
+	// The admin is responsible for setting and clearing this condition.
+	NodeDrained NodeConditionType = "Drained"
+	// NodeMaintenancePlanned reports that this Node is expected to undergo a change in the future.
+	// If this change impacts Node users, the admin should drain the Node first.
+	//
+	// Admins can use the Node maintenance condition for cases like hardware or software rollout,
+	// remediation, decommissioning, or debugging.
+	//
+	// The admin is responsible for setting and clearing this condition.
+	NodeMaintenancePlanned NodeConditionType = "MaintenancePlanned"
+	// NodeMaintenanceInProgress reports that this Node is actively undergoing maintenance.
+	//
+	// The admin decides whether the change will impact Node users and require a Node drain.
+	// For example, it is recommended to drain a Node before a Kubernetes upgrade.
+	// In contrast, a kernel live patch may not require a Node drain, but it can still be useful
+	// to communicate that maintenance is in progress.
+	//
+	// The admin is responsible for setting and clearing this condition.
+	NodeMaintenanceInProgress NodeConditionType = "MaintenanceInProgress"
 )
 
 // NodeCondition contains condition information for a node.
@@ -7151,6 +7184,7 @@ type NamespaceCondition struct {
 // Namespace provides a scope for Names.
 // Use of multiple namespaces is optional.
 // +k8s:supportsSubresource="/status"
+// +k8s:supportsSubresource="/finalize"
 type Namespace struct {
 	metav1.TypeMeta `json:""`
 	// Standard object's metadata.
@@ -7194,6 +7228,7 @@ type Binding struct {
 	// Standard object's metadata.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// The target object that you want to bind to the standard object.
@@ -8160,6 +8195,7 @@ type ComponentStatus struct {
 	// Standard object's metadata.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// List of component conditions observed
@@ -8391,6 +8427,7 @@ type RangeAllocation struct {
 	// Standard object's metadata.
 	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	// +optional
+	// +k8s:opaqueType
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
 
 	// Range is string that identifies the range represented by 'data'.

@@ -29,7 +29,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/api/scheduling/v1alpha3"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -191,7 +191,6 @@ type PluginNotImplementingScore struct{}
 func (pl *PluginNotImplementingScore) Name() string {
 	return pluginNotImplementingScore
 }
-
 func newTestPlugin(_ context.Context, injArgs runtime.Object, f fwk.Handle) (fwk.Plugin, error) {
 	return &TestPlugin{name: testPlugin}, nil
 }
@@ -229,7 +228,7 @@ func (pl *TestPlugin) PreFilter(ctx context.Context, state fwk.CycleState, p *v1
 	return pl.inj.PreFilterResult, fwk.NewStatus(fwk.Code(pl.inj.PreFilterStatus), injectReason)
 }
 
-func (pl *TestPlugin) PlacementFeasible(ctx context.Context, state fwk.PlacementCycleState, podGroup fwk.PodGroupInfo) *fwk.Status {
+func (pl *TestPlugin) PlacementFeasible(ctx context.Context, placementCycleState fwk.PlacementCycleState, podGroup fwk.PodGroupInfo, args framework.PlacementFeasibleArgs) *fwk.Status {
 	return fwk.NewStatus(fwk.Code(pl.inj.PlacementFeasibleStatus), injectReason)
 }
 
@@ -287,7 +286,7 @@ func (pl *TestPlugin) PlacementScoreExtensions() fwk.PlacementScoreExtensions {
 	return nil
 }
 
-func (pl *TestPlugin) PodGroupPostFilter(ctx context.Context, pgInfo fwk.PodGroupInfo, pgSchedulingFunc framework.PodGroupSchedulingFunc) (*framework.PodGroupPostFilterResult, *fwk.Status) {
+func (pl *TestPlugin) PodGroupPostFilter(ctx context.Context, state fwk.PodGroupCycleState, pgInfo fwk.PodGroupInfo, pgSchedulingFunc fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status) {
 	return pl.inj.PodGroupPostFilterResult, fwk.NewStatus(fwk.Code(pl.inj.PodGroupPostFilterStatus), injectReason)
 }
 
@@ -476,7 +475,7 @@ var registry = func() Registry {
 	r.Register(testCloseErrorPlugin, newTestCloseErrorPlugin)
 	r.Register(placementGeneratePlugin, newTestPlacementGeneratePlugin)
 	r.Register(placementScorePlugin1, newPlacementScorePluginFactory(placementScorePlugin1))
-	r.Register(defaultPreemptionPlugin, newTestPlugin)
+	r.Register(defaultPreemptionPlugin, newMockDefaultPreemptionPlugin)
 	return r
 }()
 
@@ -781,7 +780,7 @@ type mockGangSchedulingWithPlacementFeasible struct {
 	mockGangScheduling
 }
 
-func (p *mockGangSchedulingWithPlacementFeasible) PlacementFeasible(_ context.Context, _ fwk.PlacementCycleState, _ fwk.PodGroupInfo) *fwk.Status {
+func (p *mockGangSchedulingWithPlacementFeasible) PlacementFeasible(_ context.Context, _ fwk.PlacementCycleState, _ fwk.PodGroupInfo, _ framework.PlacementFeasibleArgs) *fwk.Status {
 	return nil
 }
 
@@ -791,11 +790,11 @@ func TestPodGroupPostFilterPlugins(t *testing.T) {
 	tests := []struct {
 		name                   string
 		plugins                *config.Plugins
-		featureGate            bool
 		wantPodGroupPostFilter bool
+		expectError            bool
 	}{
 		{
-			name: "should fill pod group post filter with feature gate and default preemption",
+			name: "should fill pod group post filter when explicitly configured with default preemption",
 			plugins: &config.Plugins{
 				QueueSort: config.PluginSet{
 					Enabled: []config.Plugin{
@@ -812,12 +811,16 @@ func TestPodGroupPostFilterPlugins(t *testing.T) {
 						{Name: defaultPreemptionPlugin},
 					},
 				},
+				PodGroupPostFilter: config.PluginSet{
+					Enabled: []config.Plugin{
+						{Name: defaultPreemptionPlugin},
+					},
+				},
 			},
-			featureGate:            true,
 			wantPodGroupPostFilter: true,
 		},
 		{
-			name: "should not fill pod group post filter when feature gate is disabled",
+			name: "should not fill pod group post filter when not configured",
 			plugins: &config.Plugins{
 				QueueSort: config.PluginSet{
 					Enabled: []config.Plugin{
@@ -835,11 +838,10 @@ func TestPodGroupPostFilterPlugins(t *testing.T) {
 					},
 				},
 			},
-			featureGate:            false,
 			wantPodGroupPostFilter: false,
 		},
 		{
-			name: "should not fill pod group post filter when post filter plugin is not default preemption",
+			name: "should fail framework initialization when configured plugin does not implement PodGroupPostFilterPlugin interface",
 			plugins: &config.Plugins{
 				QueueSort: config.PluginSet{
 					Enabled: []config.Plugin{
@@ -851,59 +853,57 @@ func TestPodGroupPostFilterPlugins(t *testing.T) {
 						{Name: bindPlugin},
 					},
 				},
-				PostFilter: config.PluginSet{
+				PodGroupPostFilter: config.PluginSet{
 					Enabled: []config.Plugin{
-						{Name: testPlugin},
+						{Name: bindPlugin},
 					},
 				},
 			},
-			featureGate:            false,
-			wantPodGroupPostFilter: false,
+			expectError: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.featureGate {
-				featuregatetesting.SetFeatureGatesDuringTest(t, utilfeature.DefaultFeatureGate, featuregatetesting.FeatureOverrides{
-					features.GenericWorkload: true,
-				})
-			}
-
 			_, ctx := ktesting.NewTestContext(t)
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 
 			profile := &config.KubeSchedulerProfile{
-				Plugins: &config.Plugins{
-					QueueSort: config.PluginSet{
-						Enabled: []config.Plugin{
-							{Name: queueSortPlugin},
-						},
-					},
-					Bind: config.PluginSet{
-						Enabled: []config.Plugin{
-							{Name: bindPlugin},
-						},
-					},
-					PostFilter: config.PluginSet{
-						Enabled: []config.Plugin{
-							{Name: defaultPreemptionPlugin},
-						},
-					},
-				},
+				Plugins: tc.plugins,
 			}
-			f, _ := NewFramework(ctx, registry, profile)
+			f, err := NewFramework(ctx, registry, profile)
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("Expected framework initialization to fail, but it succeeded")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Unexpected framework initialization error: %v", err)
+			}
 
-			if tc.wantPodGroupPostFilter && len(f.PodGroupPostFilterPlugins()) != 1 {
-				t.Errorf("Expected 1 pod group post filter plugin, got %d", len(f.PodGroupPostFilterPlugins()))
+			if tc.wantPodGroupPostFilter && len(f.(*frameworkImpl).podGroupPostFilterPlugins) != 1 {
+				t.Errorf("Expected 1 pod group post filter plugin, got %d", len(f.(*frameworkImpl).podGroupPostFilterPlugins))
 			}
-			if !tc.wantPodGroupPostFilter && len(f.PodGroupPostFilterPlugins()) != 0 {
-				t.Errorf("Expected 0 pod group post filter plugin, got %d", len(f.PodGroupPostFilterPlugins()))
+			if !tc.wantPodGroupPostFilter && len(f.(*frameworkImpl).podGroupPostFilterPlugins) != 0 {
+				t.Errorf("Expected 0 pod group post filter plugin, got %d", len(f.(*frameworkImpl).podGroupPostFilterPlugins))
 			}
 		})
 	}
+}
 
+// mockDefaultPreemptionPlugin is used to simulate a default preemption plugin that implements PodGroupPostFilterPlugin
+type mockDefaultPreemptionPlugin struct {
+	TestPlugin
+}
+
+func (pl *mockDefaultPreemptionPlugin) PodGroupPostFilter(ctx context.Context, state fwk.PodGroupCycleState, pgInfo fwk.PodGroupInfo, pgSchedulingFunc fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status) {
+	return nil, nil
+}
+
+func newMockDefaultPreemptionPlugin(_ context.Context, injArgs runtime.Object, f fwk.Handle) (fwk.Plugin, error) {
+	return &mockDefaultPreemptionPlugin{TestPlugin: TestPlugin{name: defaultPreemptionPlugin}}, nil
 }
 
 func TestRunPodGroupPostFilterPlugins(t *testing.T) {
@@ -911,21 +911,15 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 	tests := []struct {
 		name                string
 		podGroupInfo        *framework.QueuedPodGroupInfo
-		existingPodGroups   []*v1alpha3.PodGroup
 		plugins             []*TestPlugin
 		featureFlagEnabeled bool
 		expectedStatus      *fwk.Status
-		expectedResult      *framework.PodGroupPostFilterResult
+		expectedResult      *fwk.PodGroupPostFilterResult
 	}{
 		{
 			name: "no registered plugins",
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
-			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
 			},
 			featureFlagEnabeled: true,
 			expectedStatus:      fwk.NewStatus(fwk.Unschedulable),
@@ -943,11 +937,6 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
 			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
-			},
 			plugins: []*TestPlugin{
 				{
 					name: "plugin1",
@@ -963,11 +952,6 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			name: "first plugin returns non supported status: Skip",
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
-			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
 			},
 			plugins: []*TestPlugin{
 				{
@@ -985,19 +969,14 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
 			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
-			},
 			plugins: []*TestPlugin{
 				{
 					name: "plugin1",
 					inj: injectedResult{
 						PodGroupPostFilterStatus: int(fwk.Success),
-						PodGroupPostFilterResult: &framework.PodGroupPostFilterResult{
-							NominatedNodeNames: map[*v1.Pod]*fwk.NominatingInfo{
-								pod1: {NominatedNodeName: "node1"},
+						PodGroupPostFilterResult: &fwk.PodGroupPostFilterResult{
+							NominatingInfos: map[types.NamespacedName]*fwk.NominatingInfo{
+								{Namespace: pod1.Namespace, Name: pod1.Name}: {NominatedNodeName: "node1"},
 							},
 						},
 					},
@@ -1011,9 +990,9 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			},
 			featureFlagEnabeled: true,
 			expectedStatus:      fwk.NewStatus(fwk.Success, injectReason),
-			expectedResult: &framework.PodGroupPostFilterResult{
-				NominatedNodeNames: map[*v1.Pod]*fwk.NominatingInfo{
-					pod1: {NominatedNodeName: "node1"},
+			expectedResult: &fwk.PodGroupPostFilterResult{
+				NominatingInfos: map[types.NamespacedName]*fwk.NominatingInfo{
+					{Namespace: pod1.Namespace, Name: pod1.Name}: {NominatedNodeName: "node1"},
 				},
 			},
 		},
@@ -1021,11 +1000,6 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			name: "first plugin returns UnschedulableAndUnresolvable",
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
-			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
 			},
 			plugins: []*TestPlugin{
 				{
@@ -1049,11 +1023,6 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
 			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
-			},
 			plugins: []*TestPlugin{
 				{
 					name: "plugin1",
@@ -1065,9 +1034,9 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 					name: "plugin2",
 					inj: injectedResult{
 						PodGroupPostFilterStatus: int(fwk.Success),
-						PodGroupPostFilterResult: &framework.PodGroupPostFilterResult{
-							NominatedNodeNames: map[*v1.Pod]*fwk.NominatingInfo{
-								pod1: {NominatedNodeName: "node2"},
+						PodGroupPostFilterResult: &fwk.PodGroupPostFilterResult{
+							NominatingInfos: map[types.NamespacedName]*fwk.NominatingInfo{
+								{Namespace: pod1.Namespace, Name: pod1.Name}: {NominatedNodeName: "node2"},
 							},
 						},
 					},
@@ -1075,9 +1044,9 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			},
 			featureFlagEnabeled: true,
 			expectedStatus:      fwk.NewStatus(fwk.Success, injectReason),
-			expectedResult: &framework.PodGroupPostFilterResult{
-				NominatedNodeNames: map[*v1.Pod]*fwk.NominatingInfo{
-					pod1: {NominatedNodeName: "node2"},
+			expectedResult: &fwk.PodGroupPostFilterResult{
+				NominatingInfos: map[types.NamespacedName]*fwk.NominatingInfo{
+					{Namespace: pod1.Namespace, Name: pod1.Name}: {NominatedNodeName: "node2"},
 				},
 			},
 		},
@@ -1085,11 +1054,6 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			name: "all plugins return Unschedulable, aggregate reasons",
 			podGroupInfo: &framework.QueuedPodGroupInfo{
 				PodGroupInfo: &framework.PodGroupInfo{Namespace: "default", Name: "pg1"},
-			},
-			existingPodGroups: []*v1alpha3.PodGroup{
-				{
-					ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "pg1"},
-				},
 			},
 			plugins: []*TestPlugin{
 				{
@@ -1145,11 +1109,7 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 				},
 			}
 
-			var objs []runtime.Object
-			for _, pg := range tc.existingPodGroups {
-				objs = append(objs, pg)
-			}
-			client := clientsetfake.NewClientset(objs...)
+			client := clientsetfake.NewClientset()
 			informerFactory := informers.NewSharedInformerFactory(client, 0)
 
 			schedFwk, err := NewFramework(ctx, reg, &profileCfg,
@@ -1161,13 +1121,13 @@ func TestRunPodGroupPostFilterPlugins(t *testing.T) {
 			}
 
 			fwkImpl := schedFwk.(*frameworkImpl)
-			var postFilterPlugins []framework.PodGroupPostFilterPlugin
+			var postFilterPlugins []fwk.PodGroupPostFilterPlugin
 			for _, pl := range tc.plugins {
 				postFilterPlugins = append(postFilterPlugins, pl)
 			}
 			fwkImpl.podGroupPostFilterPlugins = postFilterPlugins
 
-			var pgSchedulingFunc framework.PodGroupSchedulingFunc = func(_ context.Context) (*fwk.PodGroupAssignments, *fwk.Status) {
+			var pgSchedulingFunc fwk.PodGroupSchedulingFunc = func(_ context.Context) (*fwk.PodGroupAssignments, *fwk.Status) {
 				return &fwk.PodGroupAssignments{}, nil
 			}
 
@@ -1194,7 +1154,7 @@ type mockPlacementFeasiblePlugin struct {
 
 func (p *mockPlacementFeasiblePlugin) Name() string { return p.name }
 
-func (p *mockPlacementFeasiblePlugin) PlacementFeasible(ctx context.Context, state fwk.PlacementCycleState, podGroup fwk.PodGroupInfo) *fwk.Status {
+func (p *mockPlacementFeasiblePlugin) PlacementFeasible(ctx context.Context, placementCycleState fwk.PlacementCycleState, podGroup fwk.PodGroupInfo, args framework.PlacementFeasibleArgs) *fwk.Status {
 	p.called = true
 	return p.status
 }
@@ -1281,7 +1241,7 @@ func TestRunPlacementFeasiblePlugins(t *testing.T) {
 				f.placementFeasiblePlugins[i] = p
 			}
 
-			status := f.RunPlacementFeasiblePlugins(ctx, framework.NewCycleState(), nil)
+			status := f.RunPlacementFeasiblePlugins(ctx, framework.NewCycleState(), nil, framework.PlacementFeasibleArgs{})
 
 			if diff := cmp.Diff(tc.expectedStatus, status, statusCmpOpts...); diff != "" {
 				t.Errorf("Unexpected status (-want, +got):\n%s", diff)
@@ -1313,19 +1273,20 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 				},
 			},
 			wantPlugins: &config.Plugins{
-				QueueSort:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreFilter:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Filter:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostFilter:        config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreScore:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Score:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 5}}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementScore:    config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 5}}},
+				QueueSort:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreFilter:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Filter:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostFilter:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreScore:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Score:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 5}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementScore:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 5}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1353,16 +1314,17 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 				},
 			},
 			wantPlugins: &config.Plugins{
-				QueueSort:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreFilter:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Filter:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostFilter:        config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				QueueSort:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreFilter:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Filter:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostFilter:         config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1399,6 +1361,7 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: testPlugin, Weight: 1},
 					{Name: placementScorePlugin1, Weight: 1},
 				}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1425,13 +1388,14 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: testPlugin, Weight: 1},
 					{Name: scorePlugin1, Weight: 1},
 				}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementScore:    config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementScore:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1465,13 +1429,14 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: testPlugin, Weight: 1},
 					{Name: scoreWithNormalizePlugin1, Weight: 1},
 				}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementScore:    config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementScore:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1505,13 +1470,14 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: testPlugin, Weight: 1},
 					{Name: scoreWithNormalizePlugin1, Weight: 1},
 				}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementScore:    config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementScore:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1548,13 +1514,14 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: scorePlugin1, Weight: 5},
 					{Name: testPlugin, Weight: 3},
 				}},
-				Reserve:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Permit:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PreBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				Bind:              config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PostBind:          config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementGenerate: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
-				PlacementScore:    config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 2}}},
+				Reserve:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Permit:             config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PreBind:            config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				Bind:               config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PostBind:           config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementGenerate:  config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
+				PlacementScore:     config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 2}}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 		{
@@ -1671,6 +1638,7 @@ func TestNewFrameworkMultiPointExpansion(t *testing.T) {
 					{Name: testPlugin, Weight: 2},
 					{Name: placementScorePlugin1, Weight: 6},
 				}},
+				PodGroupPostFilter: config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin}}},
 			},
 		},
 	}
@@ -4073,9 +4041,21 @@ func TestRecordingMetrics(t *testing.T) {
 		{
 			name: "PlacementFeasible - Success",
 			action: func(ctx context.Context, f framework.Framework) {
-				f.RunPlacementFeasiblePlugins(ctx, state, nil)
+				f.RunPlacementFeasiblePlugins(ctx, state, nil, framework.PlacementFeasibleArgs{})
 			},
 			wantExtensionPoint: "PlacementFeasible",
+			wantStatus:         fwk.Success,
+		},
+		{
+			name: "PodGroupPostFilter - Success",
+			action: func(ctx context.Context, f framework.Framework) {
+				var pgSchedulingFunc fwk.PodGroupSchedulingFunc = func(_ context.Context) (*fwk.PodGroupAssignments, *fwk.Status) {
+					return &fwk.PodGroupAssignments{}, nil
+				}
+				f.RunPodGroupPostFilterPlugins(ctx, state, &framework.QueuedPodGroupInfo{PodGroupInfo: &framework.PodGroupInfo{}}, pgSchedulingFunc)
+			},
+			inject:             injectedResult{PodGroupPostFilterStatus: int(fwk.Success)},
+			wantExtensionPoint: "PodGroupPostFilter",
 			wantStatus:         fwk.Success,
 		},
 
@@ -4158,16 +4138,31 @@ func TestRecordingMetrics(t *testing.T) {
 		{
 			name: "PlacementFeasible - Error",
 			action: func(ctx context.Context, f framework.Framework) {
-				f.RunPlacementFeasiblePlugins(ctx, state, nil)
+				f.RunPlacementFeasiblePlugins(ctx, state, nil, framework.PlacementFeasibleArgs{})
 			},
 			inject:             injectedResult{PlacementFeasibleStatus: int(fwk.Error)},
 			wantExtensionPoint: "PlacementFeasible",
+			wantStatus:         fwk.Error,
+		},
+		{
+			name: "PodGroupPostFilter - Error",
+			action: func(ctx context.Context, f framework.Framework) {
+				var pgSchedulingFunc fwk.PodGroupSchedulingFunc = func(_ context.Context) (*fwk.PodGroupAssignments, *fwk.Status) {
+					return &fwk.PodGroupAssignments{}, nil
+				}
+				f.RunPodGroupPostFilterPlugins(ctx, state, &framework.QueuedPodGroupInfo{PodGroupInfo: &framework.PodGroupInfo{}}, pgSchedulingFunc)
+			},
+			inject:             injectedResult{PodGroupPostFilterStatus: int(fwk.Error)},
+			wantExtensionPoint: "PodGroupPostFilter",
 			wantStatus:         fwk.Error,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGatesDuringTest(t, utilfeature.DefaultFeatureGate, featuregatetesting.FeatureOverrides{
+				features.GenericWorkload: true,
+			})
 			_, ctx := ktesting.NewTestContext(t)
 			ctx, cancel := context.WithCancel(ctx)
 			metrics.FrameworkExtensionPointDuration.Reset()
@@ -4181,17 +4176,18 @@ func TestRecordingMetrics(t *testing.T) {
 				})
 			pluginSet := config.PluginSet{Enabled: []config.Plugin{{Name: testPlugin, Weight: 1}}}
 			plugins := &config.Plugins{
-				Score:             pluginSet,
-				PreFilter:         pluginSet,
-				Filter:            pluginSet,
-				PreScore:          pluginSet,
-				Reserve:           pluginSet,
-				Permit:            pluginSet,
-				PreBind:           pluginSet,
-				Bind:              pluginSet,
-				PostBind:          pluginSet,
-				PlacementGenerate: pluginSet,
-				PlacementScore:    pluginSet,
+				Score:              pluginSet,
+				PreFilter:          pluginSet,
+				Filter:             pluginSet,
+				PreScore:           pluginSet,
+				Reserve:            pluginSet,
+				Permit:             pluginSet,
+				PreBind:            pluginSet,
+				Bind:               pluginSet,
+				PostBind:           pluginSet,
+				PlacementGenerate:  pluginSet,
+				PlacementScore:     pluginSet,
+				PodGroupPostFilter: pluginSet,
 			}
 
 			recorder := metrics.NewMetricsAsyncRecorder(100, time.Nanosecond, ctx.Done())
@@ -4588,29 +4584,29 @@ func buildScoreConfigWithWeights(weights map[string]int32, ps ...string) *config
 }
 
 type injectedResult struct {
-	ScoreRes                 int64                               `json:"scoreRes,omitempty"`
-	NormalizeRes             int64                               `json:"normalizeRes,omitempty"`
-	ScoreStatus              int                                 `json:"scoreStatus,omitempty"`
-	NormalizeStatus          int                                 `json:"normalizeStatus,omitempty"`
-	PreFilterResult          *fwk.PreFilterResult                `json:"preFilterResult,omitempty"`
-	PreFilterStatus          int                                 `json:"preFilterStatus,omitempty"`
-	PreFilterAddPodStatus    int                                 `json:"preFilterAddPodStatus,omitempty"`
-	PreFilterRemovePodStatus int                                 `json:"preFilterRemovePodStatus,omitempty"`
-	FilterStatus             int                                 `json:"filterStatus,omitempty"`
-	PostFilterStatus         int                                 `json:"postFilterStatus,omitempty"`
-	PreScoreStatus           int                                 `json:"preScoreStatus,omitempty"`
-	ReserveStatus            int                                 `json:"reserveStatus,omitempty"`
-	PreBindPreFlightStatus   int                                 `json:"preBindPreFlightStatus,omitempty"`
-	PreBindStatus            int                                 `json:"preBindStatus,omitempty"`
-	BindStatus               int                                 `json:"bindStatus,omitempty"`
-	PermitStatus             int                                 `json:"permitStatus,omitempty"`
-	PermitTimeout            time.Duration                       `json:"permitTimeout,omitempty"`
-	GeneratePlacementsResult []*fwk.Placement                    `json:"generatePlacementsResult,omitempty"`
-	GeneratePlacementsStatus int                                 `json:"generatePlacementsStatus,omitempty"`
-	PlacementScoreStatus     int                                 `json:"placementScoreStatus,omitempty"`
-	PlacementFeasibleStatus  int                                 `json:"placementFeasibleStatus,omitempty"`
-	PodGroupPostFilterStatus int                                 `json:"podGroupPostFilterStatus,omitempty"`
-	PodGroupPostFilterResult *framework.PodGroupPostFilterResult `json:"podGroupPostFilterResult,omitempty"`
+	ScoreRes                 int64                         `json:"scoreRes,omitempty"`
+	NormalizeRes             int64                         `json:"normalizeRes,omitempty"`
+	ScoreStatus              int                           `json:"scoreStatus,omitempty"`
+	NormalizeStatus          int                           `json:"normalizeStatus,omitempty"`
+	PreFilterResult          *fwk.PreFilterResult          `json:"preFilterResult,omitempty"`
+	PreFilterStatus          int                           `json:"preFilterStatus,omitempty"`
+	PreFilterAddPodStatus    int                           `json:"preFilterAddPodStatus,omitempty"`
+	PreFilterRemovePodStatus int                           `json:"preFilterRemovePodStatus,omitempty"`
+	FilterStatus             int                           `json:"filterStatus,omitempty"`
+	PostFilterStatus         int                           `json:"postFilterStatus,omitempty"`
+	PreScoreStatus           int                           `json:"preScoreStatus,omitempty"`
+	ReserveStatus            int                           `json:"reserveStatus,omitempty"`
+	PreBindPreFlightStatus   int                           `json:"preBindPreFlightStatus,omitempty"`
+	PreBindStatus            int                           `json:"preBindStatus,omitempty"`
+	BindStatus               int                           `json:"bindStatus,omitempty"`
+	PermitStatus             int                           `json:"permitStatus,omitempty"`
+	PermitTimeout            time.Duration                 `json:"permitTimeout,omitempty"`
+	GeneratePlacementsResult []*fwk.Placement              `json:"generatePlacementsResult,omitempty"`
+	GeneratePlacementsStatus int                           `json:"generatePlacementsStatus,omitempty"`
+	PlacementScoreStatus     int                           `json:"placementScoreStatus,omitempty"`
+	PlacementFeasibleStatus  int                           `json:"placementFeasibleStatus,omitempty"`
+	PodGroupPostFilterStatus int                           `json:"podGroupPostFilterStatus,omitempty"`
+	PodGroupPostFilterResult *fwk.PodGroupPostFilterResult `json:"podGroupPostFilterResult,omitempty"`
 }
 
 func setScoreRes(inj injectedResult) (int64, *fwk.Status) {

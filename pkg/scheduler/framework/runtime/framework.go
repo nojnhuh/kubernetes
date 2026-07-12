@@ -76,7 +76,7 @@ type frameworkImpl struct {
 	postBindPlugins           []fwk.PostBindPlugin
 	permitPlugins             []fwk.PermitPlugin
 	batchablePlugins          []fwk.SignPlugin
-	podGroupPostFilterPlugins []framework.PodGroupPostFilterPlugin
+	podGroupPostFilterPlugins []fwk.PodGroupPostFilterPlugin
 
 	placementGeneratePlugins   []fwk.PlacementGeneratePlugin
 	placementFeasiblePlugins   []framework.PlacementFeasiblePlugin
@@ -140,6 +140,7 @@ func (f *frameworkImpl) getExtensionPoints(plugins *config.Plugins) []extensionP
 		{&plugins.QueueSort, &f.queueSortPlugins},
 		{&plugins.PlacementGenerate, &f.placementGeneratePlugins},
 		{&plugins.PlacementScore, &f.placementScorePlugins},
+		{&plugins.PodGroupPostFilter, &f.podGroupPostFilterPlugins},
 	}
 }
 
@@ -483,19 +484,6 @@ func NewFramework(ctx context.Context, r Registry, profile *config.KubeScheduler
 
 	if utilfeature.DefaultFeatureGate.Enabled(features.OpportunisticBatching) {
 		f.computeBatchablePlugins()
-	}
-
-	// Put default preemption as the only PodGroupPostFilterPlugin
-	if utilfeature.DefaultFeatureGate.Enabled(features.GenericWorkload) {
-		if dp, ok := f.pluginsMap[names.DefaultPreemption]; ok {
-			if _, ok := dp.(framework.PodGroupPostFilterPlugin); ok {
-				f.podGroupPostFilterPlugins = append(f.podGroupPostFilterPlugins, dp.(framework.PodGroupPostFilterPlugin))
-			} else {
-				logger.V(2).Info("Workload Aware Preemption is enabled, but default preemption plugin does not fulfill PodGroupPostFilterPlugin interface. Workload Aware Preemption will not be used.")
-			}
-		} else {
-			logger.V(2).Info("Workload Aware Preemption is enabled, but default preemption plugin is not set. Workload Aware Preemption will not be used.")
-		}
 	}
 
 	// Use GangScheduling plugin as the only PlacementFeasiblePlugin.
@@ -1221,10 +1209,15 @@ func (f *frameworkImpl) runPostFilterPlugin(ctx context.Context, pl fwk.PostFilt
 }
 
 // RunPodGroupPostFilterPlugins runs the set of configured PodGroupPostFilter plugins.
-func (f *frameworkImpl) RunPodGroupPostFilterPlugins(ctx context.Context, state *framework.CycleState, podGroupInfo fwk.PodGroupInfo, pgSchedulingFunc framework.PodGroupSchedulingFunc) (*framework.PodGroupPostFilterResult, *fwk.Status) {
+func (f *frameworkImpl) RunPodGroupPostFilterPlugins(ctx context.Context, state *framework.CycleState, podGroupInfo fwk.PodGroupInfo, pgSchedulingFunc fwk.PodGroupSchedulingFunc) (_ *fwk.PodGroupPostFilterResult, status *fwk.Status) {
 	if !utilfeature.DefaultFeatureGate.Enabled(features.GenericWorkload) {
 		return nil, fwk.NewStatus(fwk.Unschedulable, "generic workload feature is disabled, cannot perform PodGroupPostFilter")
 	}
+
+	startTime := time.Now()
+	defer func() {
+		metrics.FrameworkExtensionPointDuration.WithLabelValues(metrics.PodGroupPostFilter, status.Code().String(), f.profileName).Observe(metrics.SinceInSeconds(startTime))
+	}()
 
 	logger := klog.FromContext(ctx)
 	verboseLogs := logger.V(4).Enabled()
@@ -1240,7 +1233,7 @@ func (f *frameworkImpl) RunPodGroupPostFilterPlugins(ctx context.Context, state 
 			logger := klog.LoggerWithName(logger, pl.Name())
 			ctx = klog.NewContext(ctx, logger)
 		}
-		res, status := pl.PodGroupPostFilter(ctx, podGroupInfo, pgSchedulingFunc)
+		res, status := f.runPodGroupPostFilterPlugin(ctx, pl, state, podGroupInfo, pgSchedulingFunc)
 		if status.IsSuccess() {
 			return res, status
 		} else if status.Code() == fwk.UnschedulableAndUnresolvable {
@@ -1257,6 +1250,16 @@ func (f *frameworkImpl) RunPodGroupPostFilterPlugins(ctx context.Context, state 
 	}
 
 	return nil, fwk.NewStatus(fwk.Unschedulable, reasons...).WithPlugin(rejectorPlugin)
+}
+
+func (f *frameworkImpl) runPodGroupPostFilterPlugin(ctx context.Context, pl fwk.PodGroupPostFilterPlugin, state *framework.CycleState, podGroupInfo fwk.PodGroupInfo, pgSchedulingFunc fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status) {
+	if !state.ShouldRecordPluginMetrics() {
+		return pl.PodGroupPostFilter(ctx, state, podGroupInfo, pgSchedulingFunc)
+	}
+	startTime := time.Now()
+	res, status := pl.PodGroupPostFilter(ctx, state, podGroupInfo, pgSchedulingFunc)
+	f.metricsRecorder.ObservePluginDurationAsync(metrics.PodGroupPostFilter, pl.Name(), status.Code().String(), metrics.SinceInSeconds(startTime))
+	return res, status
 }
 
 // RunFilterPluginsWithNominatedPods runs the set of configured filter plugins
@@ -2073,14 +2076,14 @@ func (f *frameworkImpl) runPermitPlugin(ctx context.Context, pl fwk.PermitPlugin
 // If any plugin returns invalid status, the result will be Error and the remaining plugins won't be invoked.
 // Otherwise, if at least 1 plugin returns Unschedulable, the remaining plugins won't be invoked and the result will be Unschedulable.
 // Otherwise, if at least 1 plugin returns Wait, the remaining plugins will be invoked and the result will be Wait.
-func (f *frameworkImpl) RunPlacementFeasiblePlugins(ctx context.Context, placementCycleState fwk.PlacementCycleState, podGroupInfo fwk.PodGroupInfo) (status *fwk.Status) {
+func (f *frameworkImpl) RunPlacementFeasiblePlugins(ctx context.Context, placementCycleState fwk.PlacementCycleState, podGroupInfo fwk.PodGroupInfo, args framework.PlacementFeasibleArgs) (status *fwk.Status) {
 	startTime := time.Now()
 	defer func() {
 		metrics.FrameworkExtensionPointDuration.WithLabelValues(metrics.PlacementFeasible, status.Code().String(), f.profileName).Observe(metrics.SinceInSeconds(startTime))
 	}()
 
 	for _, pl := range f.placementFeasiblePlugins {
-		plStatus := f.runPlacementFeasiblePlugin(ctx, pl, placementCycleState, podGroupInfo)
+		plStatus := f.runPlacementFeasiblePlugin(ctx, pl, placementCycleState, podGroupInfo, args)
 		if plStatus.IsSuccess() {
 			continue
 		}
@@ -2100,12 +2103,12 @@ func (f *frameworkImpl) RunPlacementFeasiblePlugins(ctx context.Context, placeme
 	return status
 }
 
-func (f *frameworkImpl) runPlacementFeasiblePlugin(ctx context.Context, pl framework.PlacementFeasiblePlugin, state fwk.PlacementCycleState, podGroup fwk.PodGroupInfo) *fwk.Status {
+func (f *frameworkImpl) runPlacementFeasiblePlugin(ctx context.Context, pl framework.PlacementFeasiblePlugin, state fwk.PlacementCycleState, podGroup fwk.PodGroupInfo, args framework.PlacementFeasibleArgs) *fwk.Status {
 	if !state.ShouldRecordPluginMetrics() {
-		return pl.PlacementFeasible(ctx, state, podGroup)
+		return pl.PlacementFeasible(ctx, state, podGroup, args)
 	}
 	startTime := time.Now()
-	status := pl.PlacementFeasible(ctx, state, podGroup)
+	status := pl.PlacementFeasible(ctx, state, podGroup, args)
 	f.metricsRecorder.ObservePluginDurationAsync(metrics.PlacementFeasible, pl.Name(), status.Code().String(), metrics.SinceInSeconds(startTime))
 	return status
 }
@@ -2260,8 +2263,8 @@ func (f *frameworkImpl) HasScorePlugins() bool {
 	return len(f.scorePlugins) > 0
 }
 
-// PodGroupPostFilterPlugins returns registered PodGroup PostFilter plugins.
-func (f *frameworkImpl) PodGroupPostFilterPlugins() []framework.PodGroupPostFilterPlugin {
+// PodGroupPostFilterPlugins returns registered PodGroupPostFilter plugins.
+func (f *frameworkImpl) PodGroupPostFilterPlugins() []fwk.PodGroupPostFilterPlugin {
 	return f.podGroupPostFilterPlugins
 }
 
