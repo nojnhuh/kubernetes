@@ -454,7 +454,7 @@ func (pl *DynamicResources) PreFilter(ctx context.Context, state fwk.CycleState,
 	s := &stateData{}
 	state.Write(stateKey, s)
 
-	podGroupState, err := getPodGroupStateData(state)
+	podGroupState, err := getPodGroupStateDataFromPod(state)
 	if err != nil {
 		return nil, statusError(logger, err)
 	}
@@ -702,17 +702,13 @@ func getStateData(cs fwk.CycleState) (*stateData, error) {
 	return s, nil
 }
 
-func getPodGroupStateData(cs fwk.CycleState) (*podGroupStateData, error) {
-	podGroupCycleState := cs.GetPodGroupSchedulingCycle()
-	if podGroupCycleState == nil {
-		return nil, nil
-	}
-	state, err := podGroupCycleState.Read(stateKey)
+func getPodGroupStateData(cs fwk.PodGroupCycleState) (*podGroupStateData, error) {
+	state, err := cs.Read(stateKey)
 	if errors.Is(err, fwk.ErrNotFound) {
 		podGroupState := &podGroupStateData{
 			pendingAllocations: make(sets.Set[types.UID]),
 		}
-		podGroupCycleState.Write(stateKey, podGroupState)
+		cs.Write(stateKey, podGroupState)
 		return podGroupState, nil
 	}
 	if err != nil {
@@ -723,6 +719,14 @@ func getPodGroupStateData(cs fwk.CycleState) (*podGroupStateData, error) {
 		return nil, errors.New("state is not podGroupStateData")
 	}
 	return s, nil
+}
+
+func getPodGroupStateDataFromPod(cs fwk.CycleState) (*podGroupStateData, error) {
+	podGroupCycleState := cs.GetPodGroupSchedulingCycle()
+	if podGroupCycleState == nil {
+		return nil, nil
+	}
+	return getPodGroupStateData(podGroupCycleState)
 }
 
 // Filter invoked at the filter extension point.
@@ -1116,7 +1120,7 @@ func (pl *DynamicResources) Reserve(ctx context.Context, cs fwk.CycleState, pod 
 
 	logger := klog.FromContext(ctx)
 
-	podGroupState, err := getPodGroupStateData(cs)
+	podGroupState, err := getPodGroupStateDataFromPod(cs)
 	if err != nil {
 		return statusError(logger, err)
 	}
@@ -1222,7 +1226,7 @@ func (pl *DynamicResources) Unreserve(ctx context.Context, cs fwk.CycleState, po
 	if state.claims.empty() {
 		return
 	}
-	podGroupState, err := getPodGroupStateData(cs)
+	podGroupState, err := getPodGroupStateDataFromPod(cs)
 	if err != nil {
 		return
 	}
@@ -1348,7 +1352,7 @@ func (pl *DynamicResources) PreBind(ctx context.Context, cs fwk.CycleState, pod 
 
 	logger := klog.FromContext(ctx)
 
-	podGroupState, err := getPodGroupStateData(cs)
+	podGroupState, err := getPodGroupStateDataFromPod(cs)
 	if err != nil {
 		return statusError(logger, err)
 	}
