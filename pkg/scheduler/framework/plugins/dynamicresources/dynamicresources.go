@@ -128,6 +128,22 @@ type podGroupStateData struct {
 	// CycleState is only available during synchronous scheduling phases and is
 	// cleared before asynchronous phases begin.
 	pendingAllocations sets.Set[types.UID]
+
+	// mutex must be locked while accessing any of the fields below.
+	mutex sync.Mutex
+
+	// The claims that:
+	// - are allocated
+	// - were not available on at least one node
+	//
+	// Entries are read-only as they may come from an informer cache.
+	//
+	// This is not backed by a [claimStore] since these claims are set in
+	// Filter and used by PodGroupPostFilter before they could be updated.
+	//
+	// Set in parallel during Filter, so write access there must be
+	// protected by the mutex.
+	unavailableClaims sets.Set[*resourceapi.ResourceClaim]
 }
 
 func (d *podGroupStateData) Clone() fwk.StateData {
@@ -219,6 +235,7 @@ var _ fwk.PreEnqueuePlugin = &DynamicResources{}
 var _ fwk.PreFilterPlugin = &DynamicResources{}
 var _ fwk.FilterPlugin = &DynamicResources{}
 var _ fwk.PostFilterPlugin = &DynamicResources{}
+var _ fwk.PodGroupPostFilterPlugin = &DynamicResources{}
 var _ fwk.ScorePlugin = &DynamicResources{}
 var _ fwk.ReservePlugin = &DynamicResources{}
 var _ fwk.EnqueueExtensions = &DynamicResources{}
@@ -750,6 +767,11 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 		return nil
 	}
 
+	podGroupState, err := getPodGroupStateDataFromPod(cs)
+	if err != nil {
+		return statusError(klog.FromContext(ctx), err)
+	}
+
 	logger := klog.FromContext(ctx)
 	node := nodeInfo.Node()
 	nodeExtendedResourceClaim, containerResourceRequestMappings, status := pl.filterExtendedResources(state, pod, nodeInfo, logger)
@@ -895,6 +917,11 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 	if state.allocator != nil || len(unavailableClaims) > 0 {
 		state.mutex.Lock()
 		defer state.mutex.Unlock()
+
+		if podGroupState != nil {
+			podGroupState.mutex.Lock()
+			defer podGroupState.mutex.Unlock()
+		}
 	}
 
 	if len(unavailableClaims) > 0 {
@@ -904,9 +931,15 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 		if state.unavailableClaims == nil {
 			state.unavailableClaims = sets.New[int]()
 		}
+		if podGroupState != nil && podGroupState.unavailableClaims == nil {
+			podGroupState.unavailableClaims = sets.New[*resourceapi.ResourceClaim]()
+		}
 
 		for _, index := range unavailableClaims {
 			state.unavailableClaims.Insert(index)
+			if podGroupState != nil {
+				podGroupState.unavailableClaims.Insert(state.claims.get(index))
+			}
 		}
 		return statusUnschedulable(logger, "resourceclaim not available on the node", "pod", klog.KObj(pod))
 	}
@@ -928,9 +961,11 @@ func (pl *DynamicResources) Filter(ctx context.Context, cs fwk.CycleState, pod *
 // requests its deallocation.  This only gets called when filtering found no
 // suitable node.
 func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, pod *v1.Pod, filteredNodeStatusMap fwk.NodeToStatusReader) (*fwk.PostFilterResult, *fwk.Status) {
-	logger := klog.FromContext(ctx)
+	logger := klog.FromContext(ctx).WithValues("pod", klog.KObj(pod))
+	ctx = klog.NewContext(ctx, logger)
+
 	if !pl.enabled {
-		logger.V(5).Info("Nothing to do in PostFilter, plugin disabled", "pod", klog.KObj(pod))
+		logger.V(5).Info("Nothing to do in PostFilter, plugin disabled")
 		return nil, fwk.NewStatus(fwk.Unschedulable)
 	}
 
@@ -941,34 +976,8 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 	// If a Pod doesn't have any resource claims attached to it, there is no need for further processing.
 	// Thus we provide a fast path for this case to avoid unnecessary computations.
 	if state.claims.empty() {
-		logger.V(5).Info("No new claims to deallocate", "pod", klog.KObj(pod))
+		logger.V(5).Info("No new claims to deallocate")
 		return nil, fwk.NewStatus(fwk.Unschedulable)
-	}
-
-	podGroup, err := pl.getPodGroupSnapshot(pod)
-	if err != nil {
-		return nil, statusError(logger, err)
-	}
-	podGroupInactive := true
-	if podGroup != nil {
-		logger = logger.WithValues("podgroup", klog.KObj(podGroup))
-		// The podGroupState lister is based on the live cache and does not consider
-		// pods assumed within the PodGroup scheduling cycle, but the ones that
-		// happened before or outside the scheduling cycle. We use it to check
-		// whether there were no assumed or assigned pods that would use the
-		// ResourceClaim.
-		podGroupState, err := pl.fh.PodGroupManager().PodGroupStates().Get(pod.Namespace, *pod.Spec.SchedulingGroup.PodGroupName)
-		if err != nil {
-			return nil, statusError(logger, err)
-		}
-		// Since this is part of the synchronous PodGroup scheduling cycle, we
-		// know that if the PodGroup is inactive, then it will stay inactive, so
-		// it is safe to deallocate its claims.
-		//
-		// If this state is not updated yet and says the PodGroup is active when
-		// it actually isn't, then a future scheduling cycle will eventually
-		// read the updated state and deallocate a claim.
-		podGroupInactive = podGroupState.ScheduledPodsCount() == 0
 	}
 
 	extendedResourceClaim := state.claims.extendedResourceClaim()
@@ -986,23 +995,11 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 
 		reservedForNobody := len(claim.Status.ReservedFor) == 0
 		reservedForOnlyThisPod := len(claim.Status.ReservedFor) == 1 && claim.Status.ReservedFor[0].UID == pod.UID
-		reservedForOnlyThisPodGroup := podGroup != nil &&
-			podGroupInactive &&
-			len(claim.Status.ReservedFor) == 1 &&
-			claim.Status.ReservedFor[0].UID == podGroup.UID
+		// Skip deallocation if the claim is reserved only for the Pod's PodGroup.
+		// The PodGroupPostFilter phase will possibly deallocate the claim.
 
-		if reservedForNobody ||
-			reservedForOnlyThisPod ||
-			reservedForOnlyThisPodGroup {
-			claim := claim.DeepCopy()
-			claim.Status.ReservedFor = nil
-			claim.Status.Allocation = nil
-			claim.Status.Devices = nil
-			logger.V(5).Info("Deallocation of ResourceClaim", "pod", klog.KObj(pod), "resourceclaim", klog.KObj(claim))
-			if _, err := pl.clientset.ResourceV1().ResourceClaims(claim.Namespace).UpdateStatus(ctx, claim, metav1.UpdateOptions{}); err != nil {
-				return nil, statusError(logger, err)
-			}
-			return nil, fwk.NewStatus(fwk.Unschedulable, "deallocation of ResourceClaim completed")
+		if reservedForNobody || reservedForOnlyThisPod {
+			return nil, pl.deallocateClaim(ctx, claim)
 		}
 	}
 
@@ -1017,6 +1014,67 @@ func (pl *DynamicResources) PostFilter(ctx context.Context, cs fwk.CycleState, p
 	}
 
 	return nil, fwk.NewStatus(fwk.Unschedulable)
+}
+
+// PodGroupPostFilter checks whether there are allocated claims that could get
+// deallocated to help get the PodGroup schedulable. If yes, it picks one and
+// requests its deallocation. This only gets called when filtering found no
+// suitable node.
+func (pl *DynamicResources) PodGroupPostFilter(ctx context.Context, cs fwk.PodGroupCycleState, pgInfo fwk.PodGroupInfo, _ fwk.PodGroupSchedulingFunc) (*fwk.PodGroupPostFilterResult, *fwk.Status) {
+	logger := klog.FromContext(ctx).WithValues("podgroup", klog.KObj(pgInfo))
+	ctx = klog.NewContext(ctx, logger)
+
+	if !pl.enabled {
+		logger.V(5).Info("Nothing to do in PodGroupPostFilter, plugin disabled")
+		return nil, fwk.NewStatus(fwk.Unschedulable)
+	}
+
+	if !pl.fts.EnableDRAWorkloadResourceClaims {
+		logger.V(5).Info("Nothing to do in PodGroupPostFilter, DRAWorkloadResourceClaims feature disabled")
+		return nil, fwk.NewStatus(fwk.Unschedulable)
+	}
+
+	state, err := getPodGroupStateData(cs)
+	if err != nil {
+		return nil, statusError(logger, err)
+	}
+	// If a PodGroup doesn't have any resource claims attached to it, there is no need for further processing.
+	// Thus we provide a fast path for this case to avoid unnecessary computations.
+	if len(pgInfo.GetPodGroup().Spec.ResourceClaims) == 0 {
+		logger.V(5).Info("No new claims to deallocate")
+		return nil, fwk.NewStatus(fwk.Unschedulable)
+	}
+
+	podGroup := pgInfo.GetPodGroup()
+
+	// Iterating over a map is random. This is intentional here, we want to
+	// pick one claim randomly because there is no better heuristic.
+	for claim := range state.unavailableClaims {
+		reservedForNobody := len(claim.Status.ReservedFor) == 0
+		reservedForOnlyThisPodGroup := len(claim.Status.ReservedFor) == 1 && claim.Status.ReservedFor[0].UID == podGroup.UID
+
+		if reservedForNobody ||
+			reservedForOnlyThisPodGroup {
+			return nil, pl.deallocateClaim(ctx, claim)
+		}
+	}
+
+	return nil, fwk.NewStatus(fwk.Unschedulable)
+}
+
+// deallocateClaim updates claim in the API server to remove its allocation. It
+// returns a [*fwk.Status] intended for the PostFilter phase for Pods or PodGroups.
+func (pl *DynamicResources) deallocateClaim(ctx context.Context, claim *resourceapi.ResourceClaim) *fwk.Status {
+	logger := klog.FromContext(ctx)
+	claim = claim.DeepCopy()
+	claim.Status.ReservedFor = nil
+	claim.Status.Allocation = nil
+	claim.Status.Devices = nil
+	logger.V(5).Info("Deallocation of ResourceClaim", "resourceclaim", klog.KObj(claim))
+	if _, err := pl.clientset.ResourceV1().ResourceClaims(claim.Namespace).UpdateStatus(ctx, claim, metav1.UpdateOptions{}); err != nil {
+		return statusError(logger, err)
+	}
+	return fwk.NewStatus(fwk.Unschedulable, "deallocation of ResourceClaim completed")
 }
 
 func (pl *DynamicResources) Score(ctx context.Context, cs fwk.CycleState, pod *v1.Pod, nodeInfo fwk.NodeInfo) (int64, *fwk.Status) {

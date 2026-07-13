@@ -107,6 +107,7 @@ var ExpandedPluginsV1 = &config.Plugins{
 	},
 	PodGroupPostFilter: config.PluginSet{
 		Enabled: []config.Plugin{
+			{Name: names.DynamicResources},
 			{Name: names.DefaultPreemption},
 		},
 	},

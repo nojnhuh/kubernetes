@@ -1150,22 +1150,24 @@ func (p perNodeScoreResult) forNode(nodeName string) int64 {
 }
 
 type want struct {
-	preenqueue             result
-	preFilterResult        *fwk.PreFilterResult
-	prefilter              result
-	filter                 perNodeResult
-	prescore               result
-	scoreResult            perNodeScoreResult
-	score                  perNodeResult
-	normalizeScoreResult   fwk.NodeScoreList
-	normalizeScore         result
-	reserve                result
-	unreserve              result
-	preBindPreFlightStatus *fwk.Status
-	prebind                result
-	postbind               result
-	postFilterResult       *fwk.PostFilterResult
-	postfilter             result
+	preenqueue               result
+	preFilterResult          *fwk.PreFilterResult
+	prefilter                result
+	filter                   perNodeResult
+	prescore                 result
+	scoreResult              perNodeScoreResult
+	score                    perNodeResult
+	normalizeScoreResult     fwk.NodeScoreList
+	normalizeScore           result
+	reserve                  result
+	unreserve                result
+	preBindPreFlightStatus   *fwk.Status
+	prebind                  result
+	postbind                 result
+	postFilterResult         *fwk.PostFilterResult
+	postfilter               result
+	podGroupPostFilterResult *fwk.PodGroupPostFilterResult
+	podGroupPostFilter       result
 
 	// unreserveAfterBindFailure, if set, triggers a call to Unreserve
 	// after PreBind, as if the actual Bind had failed.
@@ -1181,13 +1183,14 @@ type want struct {
 // be used to simulate concurrent changes by some other entities
 // like a resource driver.
 type prepare struct {
-	filter     change
-	prescore   change
-	reserve    change
-	unreserve  change
-	prebind    change
-	postbind   change
-	postfilter change
+	filter             change
+	prescore           change
+	reserve            change
+	unreserve          change
+	prebind            change
+	postbind           change
+	postfilter         change
+	podGroupPostFilter change
 }
 
 type testPluginCase struct {
@@ -2161,6 +2164,9 @@ func testPlugin(tCtx ktesting.TContext) {
 					},
 				},
 				postfilter: result{
+					status: fwk.NewStatus(fwk.Unschedulable),
+				},
+				podGroupPostFilter: result{
 					changes: change{
 						claim: func(claim *resourceapi.ResourceClaim) *resourceapi.ResourceClaim {
 							claim = claim.DeepCopy()
@@ -2192,64 +2198,7 @@ func testPlugin(tCtx ktesting.TContext) {
 				postfilter: result{
 					status: fwk.NewStatus(fwk.Unschedulable),
 				},
-			},
-		},
-		"postfilter-deallocate-unreserved-podgroup": {
-			enableDRAWorkloadResourceClaims: true,
-			pod:                             groupedPodWithClaimName,
-			podGroups:                       []*schedulingapi.PodGroup{podGroupWithClaimName},
-			objs: []apiruntime.Object{
-				// Pods in the PodGroup
-				groupedPodWithClaimName,
-			},
-			classes: []*resourceapi.DeviceClass{deviceClass},
-			claims: []*resourceapi.ResourceClaim{
-				func() *resourceapi.ResourceClaim {
-					claim := allocatedPodGroupClaimWithWrongTopology.DeepCopy()
-					claim.Status.ReservedFor = nil
-					return claim
-				}(),
-			},
-			want: want{
-				filter: perNodeResult{
-					workerNode.Name: {
-						status: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `resourceclaim not available on the node`),
-					},
-				},
-				postfilter: result{
-					changes: change{
-						claim: func(claim *resourceapi.ResourceClaim) *resourceapi.ResourceClaim {
-							claim = claim.DeepCopy()
-							claim.Status.ReservedFor = nil
-							claim.Status.Allocation = nil
-							return claim
-						},
-					},
-					status: fwk.NewStatus(fwk.Unschedulable, `deallocation of ResourceClaim completed`),
-				},
-			},
-		},
-		"postfilter-skip-deallocate-reserved-podgroup-when-pods-active": {
-			enableDRAWorkloadResourceClaims: true,
-			pod:                             groupedPodWithClaimName,
-			podGroups:                       []*schedulingapi.PodGroup{podGroupWithClaimName},
-			objs: []apiruntime.Object{
-				// Pods in the PodGroup
-				groupedPodWithClaimName,
-				st.MakePod().Name(podName + "-2").Namespace(namespace).
-					Node(nodeName). // Scheduled, this Pod still needs the PodGroup's claim
-					PodGroupName(podGroupName).
-					Obj(),
-			},
-			classes: []*resourceapi.DeviceClass{deviceClass},
-			claims:  []*resourceapi.ResourceClaim{allocatedPodGroupClaimWithWrongTopology},
-			want: want{
-				filter: perNodeResult{
-					workerNode.Name: {
-						status: fwk.NewStatus(fwk.UnschedulableAndUnresolvable, `resourceclaim not available on the node`),
-					},
-				},
-				postfilter: result{
+				podGroupPostFilter: result{
 					status: fwk.NewStatus(fwk.Unschedulable),
 				},
 			},
@@ -3647,6 +3596,16 @@ func testPlugin(tCtx ktesting.TContext) {
 				tCtx.ExpectNoError(testCtx.draManager.ResourceClaims().SignalClaimPendingAllocation(claim.UID, claim))
 			}
 
+			cycleState := framework.NewCycleState()
+			if tc.pod.Spec.SchedulingGroup != nil && tc.pod.Spec.SchedulingGroup.PodGroupName != nil {
+				podGroupCycleState := framework.NewCycleState()
+				podGroupCycleState.Write(stateKey, &podGroupStateData{
+					pendingAllocations: sets.New[types.UID](),
+				})
+				cycleState.SetPodGroupSchedulingCycle(podGroupCycleState)
+			}
+			testCtx.state = cycleState
+
 			initialObjects := testCtx.listAll(tCtx)
 			var registry compbasemetrics.KubeRegistry
 			if tc.metrics != nil {
@@ -3759,6 +3718,9 @@ func testPlugin(tCtx ktesting.TContext) {
 						testCtx.verify(tCtx, tc.want.unreserve, initialObjects, tc.pod, nil, status)
 					})
 				} else {
+					// PodGroup cycle state is cleared before asynchronous binding.
+					cycleState.SetPodGroupSchedulingCycle(nil)
+
 					if tc.want.unreserveBeforePreBind != nil {
 						initialObjects = testCtx.listAll(tCtx)
 						testCtx.p.Unreserve(tCtx, testCtx.state, tc.pod, selectedNodeName)
@@ -3800,6 +3762,24 @@ func testPlugin(tCtx ktesting.TContext) {
 					assert.Equal(tCtx, tc.want.postFilterResult, result)
 					testCtx.verify(tCtx, tc.want.postfilter, initialObjects, tc.pod, nil, status)
 				})
+
+				if tc.pod.Spec.SchedulingGroup != nil && tc.pod.Spec.SchedulingGroup.PodGroupName != nil {
+					pgInfo := &framework.PodGroupInfo{
+						Name:      *tc.pod.Spec.SchedulingGroup.PodGroupName,
+						Namespace: tc.pod.Namespace,
+					}
+					var err error
+					pgInfo.PodGroup, err = testCtx.podGroupManager.PodGroups().Get(pgInfo.Namespace, pgInfo.Name)
+					tCtx.ExpectNoError(err)
+
+					initialObjects = testCtx.listAll(tCtx)
+					initialObjects = testCtx.updateAPIServer(tCtx, initialObjects, tc.prepare.podGroupPostFilter)
+					result, status := testCtx.p.PodGroupPostFilter(tCtx, testCtx.state.GetPodGroupSchedulingCycle(), pgInfo, nil /* pgSchedulingFunc not used by plugin */)
+					tCtx.Run("podgroupPostfilter", func(tCtx ktesting.TContext) {
+						assert.Equal(tCtx, tc.want.podGroupPostFilterResult, result)
+						testCtx.verify(tCtx, tc.want.podGroupPostFilter, initialObjects, tc.pod, nil, status)
+					})
+				}
 			}
 			if tc.metrics != nil {
 				tc.metrics(tCtx, registry)
