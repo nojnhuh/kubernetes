@@ -39,6 +39,22 @@ func TestEndpointLifecycle(t *testing.T) {
 	assert.NoFileExists(t, path.Join(tempDir, socketname))
 }
 
+func TestEndpointLifecycleTCP(t *testing.T) {
+	_, ctx := ktesting.NewTestContext(t)
+	e := endpoint{tcpAddr: ":0"}
+	listener, err := e.listen(ctx)
+	require.NoError(t, err, "listen")
+
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, listener.Addr().Network(), listener.Addr().String())
+	require.NoError(t, err, "dial")
+	require.NoError(t, conn.Close(), "close connection")
+
+	require.NoError(t, listener.Close(), "close listener")
+	_, err = d.DialContext(ctx, listener.Addr().Network(), listener.Addr().String())
+	require.ErrorContains(t, err, "connection refused", "connecting to closed listener should fail")
+}
+
 func TestEndpointListener(t *testing.T) {
 	_, ctx := ktesting.NewTestContext(t)
 	tempDir := t.TempDir()

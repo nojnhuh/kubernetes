@@ -32,10 +32,14 @@ import (
 // created at the path.
 type endpoint struct {
 	dir, file  string
+	tcpAddr    string
 	listenFunc func(ctx context.Context, socketpath string) (net.Listener, error)
 }
 
 func (e endpoint) path() string {
+	if e.tcpAddr != "" {
+		return e.tcpAddr
+	}
 	return path.Join(e.dir, e.file)
 }
 
@@ -51,7 +55,11 @@ func (e endpoint) listen(ctx context.Context) (net.Listener, error) {
 		return nil, err
 	}
 	cfg := net.ListenConfig{}
-	listener, err := cfg.Listen(ctx, "unix", socketpath)
+	network := "unix"
+	if e.tcpAddr != "" {
+		network = "tcp"
+	}
+	listener, err := cfg.Listen(ctx, network, socketpath)
 	if err != nil {
 		if removeErr := e.removeSocket(); removeErr != nil {
 			err = errors.Join(err, err)
@@ -62,6 +70,9 @@ func (e endpoint) listen(ctx context.Context) (net.Listener, error) {
 }
 
 func (e endpoint) removeSocket() error {
+	if e.tcpAddr != "" {
+		return nil
+	}
 	if err := os.Remove(e.path()); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove Unix domain socket: %w", err)
 	}

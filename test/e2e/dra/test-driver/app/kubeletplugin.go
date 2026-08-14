@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -185,6 +186,7 @@ func StartPlugin(ctx context.Context, cdiDir, driverName string, kubeClient kube
 		kubeletplugin.DriverName(driverName),
 		kubeletplugin.NodeName(nodeName),
 		kubeletplugin.KubeClient(kubeClient),
+		kubeletplugin.HealthCheckPort(0), // TODO: make this configurable
 	}
 
 	testOpts := &options{}
@@ -342,8 +344,6 @@ func (ex *ExamplePlugin) nodePrepareResource(ctx context.Context, claim *resourc
 
 	ex.mutex.Lock()
 	defer ex.mutex.Unlock()
-	ex.blockPrepareResourcesMutex.Lock()
-	defer ex.blockPrepareResourcesMutex.Unlock()
 
 	claimID := ClaimID{Name: claim.Name, UID: claim.UID}
 	if result, ok := ex.prepared[claimID]; ok {
@@ -469,6 +469,9 @@ func extractParameters(parameters runtime.RawExtension, env *map[string]string, 
 }
 
 func (ex *ExamplePlugin) PrepareResourceClaims(ctx context.Context, claims []*resourceapi.ResourceClaim) (map[types.UID]kubeletplugin.PrepareResult, error) {
+	ex.blockPrepareResourcesMutex.Lock()
+	defer ex.blockPrepareResourcesMutex.Unlock()
+
 	if failure := ex.getPrepareResourcesFailure(); failure != nil {
 		return nil, failure
 	}
@@ -753,4 +756,11 @@ func (ex *ExamplePlugin) buildHealthReport() kubeletplugin.DeviceHealthReport {
 	})
 
 	return kubeletplugin.DeviceHealthReport{Devices: devices}
+}
+
+// GetHealthCheckAddress returns the address of the health check service, or nil
+// if health checking is disabled. If a dynamically allocated port was
+// requested, then this address includes the resolved port.
+func (ex *ExamplePlugin) GetHealthCheckAddress() net.Addr {
+	return ex.d.GetHealthCheckAddress()
 }

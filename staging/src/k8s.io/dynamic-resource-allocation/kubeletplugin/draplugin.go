@@ -22,13 +22,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"k8s.io/klog/v2"
 
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
@@ -812,6 +817,44 @@ func MetadataFileOps(ops MetadataFileOperations) Option {
 	}
 }
 
+// HealthCheckPort defines the TCP port number on which to serve a gRPC-based
+// health checking service for use as a liveness probe for the Pod running the
+// plugin. Cannot exceed 65535, negative values disable health checks, 0
+// dynamically allocates a random port.
+//
+// Configuring a valid health check port enables checks for each of the
+// following gRPC services:
+//   - dra: when [DRAService] is enabled, calls
+//     [drapbv1.DRAPluginClient.NodePrepareResources] on the DRA socket with an
+//     empty, non-nil [drapbv1.NodePrepareResourcesRequest] and a successful
+//     response must be received within 1s. Implementations of
+//     [DRAPlugin.PrepareResourceClaims] must be able to handle empty requests
+//     in order to use this health check.
+//   - registration: when [RegistrationService] is enabled, calls
+//     [registerapi.RegistrationClient.GetInfo] on the registration socket and
+//     a successful response must be received within 1s.
+//
+// Probes can configure probes to check individual
+// services via [k8s.io/api/core/v1.GRPCAction.Service] using the names above
+// ("dra", "registration"). When requests do not specify a service (or specify
+// ""), then the aggregate health of all services is checked and any unhealthy
+// service will return an unhealthy response.
+//
+// Recommended probe settings:
+//
+//	livenessProbe:
+//	  grpc:
+//	    port: <this port>
+//	  timeoutSeconds: 5
+//	  failureThreshold: 3
+//	  periodSeconds: 10
+func HealthCheckPort(port int) Option {
+	return func(o *options) error {
+		o.healthCheckPort = port
+		return nil
+	}
+}
+
 type options struct {
 	logger                     klog.Logger
 	grpcVerbosity              int
@@ -840,6 +883,7 @@ type options struct {
 	metadataVersions           []schema.GroupVersion
 	cdiDir                     string
 	metadataFileOps            MetadataFileOperations
+	healthCheckPort            int
 }
 
 // Helper combines the kubelet registration service and the DRA node plugin
@@ -863,6 +907,7 @@ type Helper struct {
 	grpcLockFilePath      string
 	reconcilePoolWithName string
 	metadataWriter        *metadataWriter
+	healthCheckServer     *grpcServer
 
 	// Information about resource publishing changes concurrently and thus
 	// must be protected by the mutex. The controller gets started only
@@ -898,6 +943,7 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 		healthService:       true,
 		healthV1:            true,
 		healthV1alpha1:      true,
+		healthCheckPort:     -1,
 	}
 	for _, option := range opts {
 		if err := option(&o); err != nil {
@@ -981,6 +1027,10 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 		d.metadataWriter = mw
 	}
 
+	if o.healthCheckPort > math.MaxUint16 {
+		return nil, fmt.Errorf("invalid health check port %d, must be 1-%d", o.healthCheckPort, math.MaxUint16)
+	}
+
 	// Stop calls cancel and therefore both cancellation
 	// and Stop cause goroutines to stop.
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -1050,6 +1100,8 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 		listenFunc: o.draEndpointListen,
 	}
 
+	var healthChecks []healthCheck
+
 	if o.draService {
 		// Run the node plugin gRPC server first to ensure that it is ready.
 		pluginServer, err := startGRPCServer(
@@ -1093,6 +1145,29 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 			return nil, fmt.Errorf("start DRA service: %w", err)
 		}
 		d.pluginServer = pluginServer
+
+		healthChecks = append(healthChecks, healthCheck{
+			name: "dra",
+			check: func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+				defer cancel()
+				conn, err := grpc.NewClient(
+					pluginServer.address(),
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+				)
+				if err != nil {
+					return fmt.Errorf("connect to DRA socket: %w", err)
+				}
+				if o.nodeV1 {
+					client := drapbv1.NewDRAPluginClient(conn)
+					_, err = client.NodePrepareResources(ctx, &drapbv1.NodePrepareResourcesRequest{})
+				} else if o.nodeV1beta1 {
+					client := drapbv1beta1.NewDRAPluginClient(conn)
+					_, err = client.NodePrepareResources(ctx, &drapbv1beta1.NodePrepareResourcesRequest{})
+				}
+				return err
+			},
+		})
 	}
 
 	if o.registrationService {
@@ -1114,6 +1189,47 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 			return nil, fmt.Errorf("start registrar: %w", err)
 		}
 		d.registrar = registrar
+
+		healthChecks = append(healthChecks, healthCheck{
+			name: "registration",
+			check: func(ctx context.Context) error {
+				ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+				defer cancel()
+				conn, err := grpc.NewClient(
+					registrar.server.address(),
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+				)
+				if err != nil {
+					return fmt.Errorf("connect to registration socket: %w", err)
+				}
+				client := registerapi.NewRegistrationClient(conn)
+				_, err = client.GetInfo(ctx, &registerapi.InfoRequest{})
+				return err
+			},
+		})
+	}
+
+	if o.healthCheckPort >= 0 {
+		healthCheckEndpoint := endpoint{
+			tcpAddr: ":" + strconv.Itoa(o.healthCheckPort),
+		}
+		healthCheck, err := startGRPCServer(
+			klog.LoggerWithName(logger, "healthcheck"),
+			o.grpcVerbosity,
+			o.unaryInterceptors,
+			o.streamInterceptors,
+			healthCheckEndpoint,
+			func(ctx context.Context, err error) {
+				plugin.HandleError(ctx, err, "healthcheck gRPC server failed")
+			},
+			func(s *grpc.Server) {
+				grpc_health_v1.RegisterHealthServer(s, &healthCheckServer{checks: healthChecks})
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("start healthcheck: %w", err)
+		}
+		d.healthCheckServer = healthCheck
 	}
 
 	// startGRPCServer and startRegistrar don't implement cancellation
@@ -1124,6 +1240,7 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 		<-ctx.Done()
 
 		// Time to stop.
+		d.healthCheckServer.stop()
 		d.pluginServer.stop()
 		d.registrar.stop()
 
@@ -1240,6 +1357,16 @@ func (d *Helper) RegistrationStatus() *registerapi.RegistrationStatus {
 	}
 	// TODO: protect against concurrency issues.
 	return d.registrar.status
+}
+
+// GetHealthCheckAddress returns the address of the health check service, or nil
+// if health checking is disabled. If a dynamically allocated port was requested
+// by [HealthCheckPort], then this address includes the resolved port.
+func (d *Helper) GetHealthCheckAddress() net.Addr {
+	if d.healthCheckServer == nil {
+		return nil
+	}
+	return d.healthCheckServer.listenAddr
 }
 
 // SetGetInfoError configures the registration server to make

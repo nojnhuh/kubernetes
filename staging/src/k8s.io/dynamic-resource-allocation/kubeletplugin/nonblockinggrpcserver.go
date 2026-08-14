@@ -19,6 +19,7 @@ package kubeletplugin
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 
@@ -31,7 +32,7 @@ var requestID int64
 type grpcServer struct {
 	grpcVerbosity int
 	wg            sync.WaitGroup
-	endpoint      endpoint
+	listenAddr    net.Addr
 	server        *grpc.Server
 }
 
@@ -45,14 +46,14 @@ type registerService func(s *grpc.Server)
 func startGRPCServer(logger klog.Logger, grpcVerbosity int, unaryInterceptors []grpc.UnaryServerInterceptor, streamInterceptors []grpc.StreamServerInterceptor, endpoint endpoint, errHandler func(ctx context.Context, err error), services ...registerService) (*grpcServer, error) {
 	ctx := klog.NewContext(context.Background(), logger)
 
-	s := &grpcServer{
-		endpoint:      endpoint,
-		grpcVerbosity: grpcVerbosity,
-	}
-
 	listener, err := endpoint.listen(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("listen on %q: %w", s.endpoint.path(), err)
+		return nil, fmt.Errorf("listen on %q: %w", endpoint.path(), err)
+	}
+
+	s := &grpcServer{
+		grpcVerbosity: grpcVerbosity,
+		listenAddr:    listener.Addr(),
 	}
 
 	// Run a gRPC server. It will close the listening socket when
@@ -205,6 +206,15 @@ func (l logStream) SendMsg(msg interface{}) error {
 		logger.V(l.grpcVerbosity).Info("sending stream message succeeded")
 	}
 	return err
+}
+
+// address returns a URI that can be used to connect to the server.
+func (s *grpcServer) address() string {
+	addr := s.listenAddr.String()
+	if s.listenAddr.Network() == "unix" {
+		addr = "unix://" + addr
+	}
+	return addr
 }
 
 // stop ensures that the server is not running anymore and cleans up all resources.

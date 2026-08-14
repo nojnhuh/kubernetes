@@ -42,6 +42,9 @@ import (
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gstruct"
 	"github.com/onsi/gomega/types"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
 	v1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
@@ -1353,6 +1356,75 @@ var _ = framework.SIGDescribe("node")(framework.WithLabel("DRA"), feature.Dynami
 				),
 			)
 
+		})
+	})
+
+	f.Context("Kubelet Plugin Health Check", f.WithSerial(), func() {
+		var (
+			kubeletPlugin     *testdriver.ExamplePlugin
+			healthCheckClient grpc_health_v1.HealthClient
+		)
+
+		ginkgo.BeforeEach(func(ctx context.Context) {
+			kubeletPlugin = newKubeletPlugin(ctx, f.ClientSet, f.Namespace.Name, getNodeName(ctx, f), driverName)
+			addr := kubeletPlugin.GetHealthCheckAddress().String()
+			if kubeletPlugin.GetHealthCheckAddress().Network() == "unix" {
+				addr = "unix://" + addr
+			}
+			conn, err := grpc.NewClient(
+				addr,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
+			framework.ExpectNoError(err, "failed to create health check client")
+			healthCheckClient = grpc_health_v1.NewHealthClient(conn)
+		})
+
+		verifyHealthCheckStatus := func(ctx context.Context, client grpc_health_v1.HealthClient, service string, expectedStatus grpc_health_v1.HealthCheckResponse_ServingStatus) {
+			ginkgo.GinkgoHelper()
+			gomega.Eventually(func(ctx context.Context) (*grpc_health_v1.HealthCheckResponse, error) {
+				return client.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: service})
+			}).
+				WithContext(ctx).
+				WithTimeout(10 * time.Second).
+				Should(gomega.HaveField("Status", gomega.WithTransform( // display strings in error messages instead of ints
+					func(actualStatus grpc_health_v1.HealthCheckResponse_ServingStatus) string {
+						return actualStatus.String()
+					},
+					gomega.Equal(expectedStatus.String()),
+				)))
+		}
+
+		ginkgo.It("must signal healthy status after starting", func(ctx context.Context) {
+			verifyHealthCheckStatus(ctx, healthCheckClient, "", grpc_health_v1.HealthCheckResponse_SERVING)
+		})
+
+		ginkgo.It("must signal unhealthy status when NodePrepareResources is blocked", func(ctx context.Context) {
+			unblockNodePrepareResources := kubeletPlugin.BlockNodePrepareResources()
+			defer unblockNodePrepareResources()
+
+			verifyHealthCheckStatus(ctx, healthCheckClient, "", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+		})
+
+		ginkgo.It("must signal unhealthy status when NodePrepareResources returns an error in its response", func(ctx context.Context) {
+			unsetNodePrepareResourcesFailureMode := kubeletPlugin.SetNodePrepareResourcesFailureMode()
+			defer unsetNodePrepareResourcesFailureMode()
+
+			verifyHealthCheckStatus(ctx, healthCheckClient, "", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+		})
+
+		ginkgo.It("must signal unhealthy status when GetInfo returns an error in its response", func(ctx context.Context) {
+			kubeletPlugin.SetGetInfoError(fmt.Errorf("an error occurred"))
+			defer kubeletPlugin.SetGetInfoError(nil)
+
+			verifyHealthCheckStatus(ctx, healthCheckClient, "", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+		})
+
+		ginkgo.It("must only check the service named in the request", func(ctx context.Context) {
+			unblockNodePrepareResources := kubeletPlugin.BlockNodePrepareResources()
+			defer unblockNodePrepareResources()
+
+			verifyHealthCheckStatus(ctx, healthCheckClient, "registration", grpc_health_v1.HealthCheckResponse_SERVING)
+			verifyHealthCheckStatus(ctx, healthCheckClient, "dra", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 		})
 	})
 })
