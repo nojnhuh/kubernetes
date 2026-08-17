@@ -433,7 +433,7 @@ func PluginSocket(name string) Option {
 //
 // This is used in Kubernetes for end-to-end testing. The default should
 // be fine for DRA drivers.
-func PluginListener(listen func(ctx context.Context, path string) (net.Listener, error)) Option {
+func PluginListener(listen func(ctx context.Context, addr net.Addr) (net.Listener, error)) Option {
 	return func(o *options) error {
 		o.draEndpointListen = listen
 		return nil
@@ -855,6 +855,17 @@ func HealthCheckPort(port int) Option {
 	}
 }
 
+// HealthCheckListener configures how to create the health check port.
+//
+// This is used in Kubernetes for end-to-end testing. The default should
+// be fine for DRA drivers.
+func HealthCheckListener(listen func(ctx context.Context, addr net.Addr) (net.Listener, error)) Option {
+	return func(o *options) error {
+		o.healthCheckEndpointListen = listen
+		return nil
+	}
+}
+
 type options struct {
 	logger                     klog.Logger
 	grpcVerbosity              int
@@ -865,7 +876,7 @@ type options struct {
 	pluginDataDirectoryPath    string // The directory where the plugin socket is created.
 	pluginSocket               string // The socket name for the DRA gRPC service.
 	rollingUpdateUID           types.UID
-	draEndpointListen          func(ctx context.Context, path string) (net.Listener, error)
+	draEndpointListen          func(ctx context.Context, addr net.Addr) (net.Listener, error)
 	unaryInterceptors          []grpc.UnaryServerInterceptor
 	streamInterceptors         []grpc.StreamServerInterceptor
 	kubeClient                 kubernetes.Interface
@@ -884,6 +895,7 @@ type options struct {
 	cdiDir                     string
 	metadataFileOps            MetadataFileOperations
 	healthCheckPort            int
+	healthCheckEndpointListen  func(ctx context.Context, addr net.Addr) (net.Listener, error)
 }
 
 // Helper combines the kubelet registration service and the DRA node plugin
@@ -1211,7 +1223,8 @@ func Start(ctx context.Context, plugin DRAPlugin, opts ...Option) (result *Helpe
 
 	if o.healthCheckPort >= 0 {
 		healthCheckEndpoint := endpoint{
-			tcpAddr: ":" + strconv.Itoa(o.healthCheckPort),
+			tcpAddr:    ":" + strconv.Itoa(o.healthCheckPort),
+			listenFunc: o.healthCheckEndpointListen,
 		}
 		healthCheck, err := startGRPCServer(
 			klog.LoggerWithName(logger, "healthcheck"),

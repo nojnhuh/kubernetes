@@ -990,21 +990,23 @@ var errListenerDone = errors.New("listener is shutting down")
 // listen returns the function which the kubeletplugin helper needs to open a listening socket.
 // For that it spins up hostpathplugin in the pod for the desired node
 // and connects to hostpathplugin via port forwarding.
-func (d *Driver) listen(tCtx ktesting.TContext, pod *v1.Pod, port *atomic.Int32) func(ctx context.Context, endpoint string) (net.Listener, error) {
-	return func(ctx context.Context, endpoint string) (l net.Listener, e error) {
+func (d *Driver) listen(tCtx ktesting.TContext, pod *v1.Pod, port *atomic.Int32) func(ctx context.Context, endpoint net.Addr) (net.Listener, error) {
+	return func(ctx context.Context, endpoint net.Addr) (l net.Listener, e error) {
 		// No need create sockets, the kubelet is not expected to use them.
 		if !d.WithKubelet {
 			return newNullListener(), nil
 		}
 
-		// Try opening the socket directly on the local host. Falls back to pod if that fails.
+		// Try opening the socket or port directly on the local host. Falls back to pod if that fails.
 		// Closing the listener will unlink the socket.
 		if d.IsLocal {
-			dir := path.Dir(endpoint)
-			if err := os.MkdirAll(dir, 0755); err != nil {
-				return nil, err
+			if endpoint.Network() == "unix" {
+				dir := path.Dir(endpoint.String())
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					return nil, err
+				}
 			}
-			return net.ListenUnix("unix", &net.UnixAddr{Name: endpoint, Net: "unix"})
+			return net.Listen(endpoint.Network(), endpoint.String())
 		}
 
 		// "Allocate" a new port by by bumping the per-pod counter by one.
@@ -1012,8 +1014,13 @@ func (d *Driver) listen(tCtx ktesting.TContext, pod *v1.Pod, port *atomic.Int32)
 
 		logger := klog.FromContext(ctx)
 		logger = klog.LoggerWithName(logger, "socket-listener")
-		logger = klog.LoggerWithValues(logger, "endpoint", endpoint, "port", port)
+		logger = klog.LoggerWithValues(logger, "endpoint", endpoint.String(), "port", port)
 		ctx = klog.NewContext(ctx, logger)
+
+		endpointScheme := "unix"
+		if endpoint.Network() == "tcp" {
+			endpointScheme = "tcp"
+		}
 
 		// Start hostpathplugin in proxy mode and keep it running until the listener gets closed.
 		req := tCtx.Client().CoreV1().RESTClient().Post().
@@ -1026,7 +1033,7 @@ func (d *Driver) listen(tCtx ktesting.TContext, pod *v1.Pod, port *atomic.Int32)
 				Command: []string{
 					"/hostpathplugin",
 					"--v=5",
-					"--endpoint=" + endpoint,
+					"--endpoint=" + endpointScheme + "://" + endpoint.String(),
 					fmt.Sprintf("--proxy-endpoint=tcp://:%d", port),
 				},
 				Stdout: true,
@@ -1063,25 +1070,27 @@ func (d *Driver) listen(tCtx ktesting.TContext, pod *v1.Pod, port *atomic.Int32)
 			_ = delayFn.Until(cmdCtx, true /* immediate */, true /* sliding */, runHostpathPlugin)
 
 			// Killing hostpathplugin does not remove the socket. Need to do that manually.
-			req := tCtx.Client().CoreV1().RESTClient().Post().
-				Resource("pods").
-				Namespace(tCtx.Namespace()).
-				Name(pod.Name).
-				SubResource("exec").
-				VersionedParams(&v1.PodExecOptions{
-					Container: pod.Spec.Containers[0].Name,
-					Command: []string{
-						"rm",
-						"-f",
-						endpoint,
-					},
-					Stdout: true,
-					Stderr: true,
-				}, scheme.ParameterCodec)
-			cleanupLogger := klog.LoggerWithName(logger, "cleanup")
-			cleanupCtx := klog.NewContext(ctx, cleanupLogger)
-			if err := execute(cleanupCtx, req.URL(), tCtx.RESTConfig(), 0); err != nil {
-				cleanupLogger.Error(err, "Socket removal failed")
+			if endpoint.Network() == "unix" {
+				req := tCtx.Client().CoreV1().RESTClient().Post().
+					Resource("pods").
+					Namespace(tCtx.Namespace()).
+					Name(pod.Name).
+					SubResource("exec").
+					VersionedParams(&v1.PodExecOptions{
+						Container: pod.Spec.Containers[0].Name,
+						Command: []string{
+							"rm",
+							"-f",
+							endpoint.String(),
+						},
+						Stdout: true,
+						Stderr: true,
+					}, scheme.ParameterCodec)
+				cleanupLogger := klog.LoggerWithName(logger, "cleanup")
+				cleanupCtx := klog.NewContext(ctx, cleanupLogger)
+				if err := execute(cleanupCtx, req.URL(), tCtx.RESTConfig(), 0); err != nil {
+					cleanupLogger.Error(err, "Socket removal failed")
+				}
 			}
 		}()
 		defer func() {

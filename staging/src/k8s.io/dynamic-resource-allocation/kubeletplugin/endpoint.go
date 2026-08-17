@@ -33,7 +33,7 @@ import (
 type endpoint struct {
 	dir, file  string
 	tcpAddr    string
-	listenFunc func(ctx context.Context, socketpath string) (net.Listener, error)
+	listenFunc func(ctx context.Context, addr net.Addr) (net.Listener, error)
 }
 
 func (e endpoint) path() string {
@@ -47,7 +47,18 @@ func (e endpoint) listen(ctx context.Context) (net.Listener, error) {
 	socketpath := e.path()
 
 	if e.listenFunc != nil {
-		return e.listenFunc(ctx, socketpath)
+		var addr net.Addr = &net.UnixAddr{
+			Net:  "unix",
+			Name: e.path(),
+		}
+		if e.tcpAddr != "" {
+			addr, err :=  net.ResolveTCPAddr("tcp", e.tcpAddr)
+			if err != nil 
+		}
+		if e.path() != "" {
+
+		}
+		return e.listenFunc(ctx, addr)
 	}
 
 	// Remove stale sockets, listen would fail otherwise.
